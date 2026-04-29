@@ -86,14 +86,21 @@ which **is** a deviation — noted in the help text.
 
 ## What to be aware of
 
-- **Base VLA.** The reference uses `π0.6` (SigLIP + Gemma 4B + 860M flow
-  action expert). This repo's Phase-1 consumes a `Qwenvl_OFT` VLA
-  (Qwen2.5-VL-3B + MLP action head). The encoder-decoder construction
-  is base-VLA-agnostic — it only sees `z_{1:M}` — but the meaning of
+- **Base VLA.** Two backbones are wired in:
+  - `Qwenvl_OFT` (Qwen2.5-VL-3B + MLP action head) — original target.
+  - `PaliGemmaPi05` (SigLIP + Gemma 2B + flow-matching action expert) —
+    routes through the Pi05 inference adapter
+    (`pi05_inference_zhanghe.py`) which fuses prefix Gemma forward +
+    diffusion in one call per rollout step.
+  Both go through the same `RLTokenEncoderDecoder`; only the
+  `get_vla_hidden_states` dispatch differs (see `vla_features.py` vs
+  `vla_features_pi05_zhanghe.py`). The encoder-decoder construction is
+  base-VLA-agnostic — it only sees `z_{1:M}` — but the meaning of
   "task-relevant information" inside `z_{1:M}` is whatever the pretrained
   backbone you pass in happens to encode.
-- **Chunk length and hidden dim.** Taken from the loaded VLA
-  (`vla.chunk_len`, `qwen_vl_interface.model.config.hidden_size`).
+- **Chunk length and hidden dim.** Taken from the loaded VLA. For Qwen,
+  via `qwen_vl_interface.model.config.hidden_size`; for Pi05, via the
+  framework's interior PaliGemma config. Both expose `vla.chunk_len`.
 - **Max sequence length.** The decoder's positional embedding is
   allocated at `--max_len` (default 4096). For longer inputs (e.g. more
   cameras or longer instructions) pass a larger `--max_len`.
@@ -104,6 +111,8 @@ which **is** a deviation — noted in the help text.
   `--keep_action_tokens` to include them (e.g. for ablations).
 
 ## How to run
+
+### Phase-1 (encoder-decoder pretrain)
 
 ```bash
 # Frozen VLA, demo-driven, reference-faithful:
@@ -123,6 +132,19 @@ python AlphaBrain/training/reinforcement_learning/trainers/train.py \
 
 Enable the joint VLA fine-tune (Algorithm 1, line 3) with e.g.
 `--alpha_vla 1.0 --lr_vla 5e-6`.
+
+### Phase-2 (TD3 with frozen VLA + frozen encoder + trainable actor/critic)
+
+Reuses the production Phase-2 trainer with `--encoder_mode rlt_ori`:
+
+```bash
+# Qwen backbone:
+bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release.sh 0
+
+# Pi05 backbone (1traj or 5traj):
+VARIANT=1traj TASK_ID=0 bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh 0
+VARIANT=5traj TASK_ID=3 bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh 0
+```
 
 The best encoder-decoder checkpoint lands at:
 
@@ -147,6 +169,6 @@ match at load time.
 | Decoder | Self-attention, causal, `z_rl` prefix | Encoder-decoder cross-attention, causal target, `z_rl` memory |
 | Phase-1 data | Random-rollout observations | Demonstrations (fallback: rollouts) |
 | Joint VLA SFT | Not in Phase-1 | `α L_vla` term (Algorithm 1, line 3) |
-| Phase 2 (actor/critic, TD3) | Shipped | Not yet; reuses production Phase-2 with `--encoder_path` |
+| Phase 2 (actor/critic, TD3) | Shipped | Reuses the same Phase-2 trainer via `--encoder_mode rlt_ori` |
 
 Both live side-by-side; pick whichever matches your study's goal.
