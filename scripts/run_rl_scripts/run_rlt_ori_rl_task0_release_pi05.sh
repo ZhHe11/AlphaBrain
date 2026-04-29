@@ -1,16 +1,23 @@
 #!/bin/bash
-# Pi05 (PaliGemmaPi05) variant of run_rlt_ori_rl_task0_release.sh.
-# Same hyperparams + steplock; only the VLA backbone and the Phase-1
-# encoder are swapped to the Pi05 5traj pair.
+# Pi05 (PaliGemmaPi05) RLT_ori Phase-2 TD3 launcher.
+# Same hyperparams + steplock for both 1traj and 5traj variants; only the
+# VLA backbone and Phase-1 encoder differ.
 #
-# Phase-2 RL is wired through the new Pi05 inference adapter
-# (AlphaBrain/training/reinforcement_learning/algos/RLT_ori/pi05_inference_zhanghe.py)
-# which runs PaliGemma's prefix Gemma forward + flow-matching diffusion
-# in a single fused call per rollout step. Trainer/rollout/eval all
-# dispatch on framework type (is_pi05) — no behavior change for Qwen runs.
+# Phase-2 RL is wired through the Pi05 inference adapter
+# (algos/RLT_ori/pi05_inference_zhanghe.py) which runs PaliGemma's prefix
+# Gemma forward + flow-matching diffusion in a single fused call per
+# rollout step. Trainer/rollout/eval all dispatch on framework type
+# (is_pi05) — no behavior change for Qwen runs.
 #
 # Usage:
-#   bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh [GPU_ID]
+#   VARIANT=1traj TASK_ID=0 bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh [GPU_ID]
+#   VARIANT=5traj TASK_ID=3 bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh [GPU_ID]
+#
+# Env overrides:
+#   VARIANT      1traj|5traj  (default 1traj)
+#   TASK_ID      libero_goal task index (default 0)
+#   CKPT_PATH    override VLA ckpt directory
+#   ENCODER_PATH override Phase-1 encoder.pt
 set -euo pipefail
 cd "${ALPHABRAIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
@@ -24,11 +31,23 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
 GPU_ID=${1:-0}
 TASK_ID=${TASK_ID:-0}
+VARIANT=${VARIANT:-1traj}
 
-CKPT_PATH="results/training/Pi05-5traj-libero_goal/checkpoints/steps_50000"
-ENCODER_PATH="results/rlt_ori_training/pi05_5traj_libero_goal_strict_0426_0921/pretrain/checkpoints/pretrain_best/encoder.pt"
+if [[ "${VARIANT}" != "1traj" && "${VARIANT}" != "5traj" ]]; then
+    echo "ERROR: VARIANT must be '1traj' or '5traj' (got '${VARIANT}')"
+    exit 1
+fi
 
-RUN_NAME="rlt_ori_rl_t${TASK_ID}_release_pi05"
+# Latest pretrain dir for this variant (timestamp-suffixed); pick the most
+# recent one matching the prefix unless caller overrides ENCODER_PATH.
+DEFAULT_CKPT="results/training/Pi05-goal-${VARIANT}-openpi/checkpoints/steps_30000"
+DEFAULT_PRETRAIN_DIR=$(ls -td results/rlt_ori_training/pi05_${VARIANT}_openpi_strict_*/pretrain 2>/dev/null | head -1 || true)
+DEFAULT_ENCODER="${DEFAULT_PRETRAIN_DIR:+${DEFAULT_PRETRAIN_DIR}/checkpoints/pretrain_best/encoder.pt}"
+
+CKPT_PATH="${CKPT_PATH:-${DEFAULT_CKPT}}"
+ENCODER_PATH="${ENCODER_PATH:-${DEFAULT_ENCODER}}"
+
+RUN_NAME="rlt_ori_rl_t${TASK_ID}_release_pi05_${VARIANT}"
 TIMESTAMP=$(date +%m%d_%H%M)
 OUTPUT_DIR="results/rlt_ori_training/${RUN_NAME}_${TIMESTAMP}/rl_offpolicy"
 mkdir -p "${OUTPUT_DIR}"
@@ -38,14 +57,14 @@ if [ ! -d "${CKPT_PATH}" ]; then
     echo "ERROR: VLA ckpt not found: ${CKPT_PATH}"
     exit 1
 fi
-if [ ! -f "${ENCODER_PATH}" ]; then
-    echo "ERROR: RLT_ori encoder not found: ${ENCODER_PATH}"
-    echo "       Run scripts/run_rl_scripts/run_rlt_ori_pretrain.sh first."
+if [ -z "${ENCODER_PATH}" ] || [ ! -f "${ENCODER_PATH}" ]; then
+    echo "ERROR: RLT_ori encoder not found: ${ENCODER_PATH:-<unset>}"
+    echo "       (Pi05 ${VARIANT} Phase-1 may still be running.)"
     exit 1
 fi
 
 echo "============================================================"
-echo " RLT_ori Phase-2 TD3 (release-pi05, libero_goal task ${TASK_ID})"
+echo " RLT_ori Phase-2 TD3 (release-pi05-${VARIANT}, libero_goal task ${TASK_ID})"
 echo "   GPU:        ${GPU_ID}"
 echo "   ckpt:       ${CKPT_PATH}"
 echo "   encoder:    ${ENCODER_PATH}"
