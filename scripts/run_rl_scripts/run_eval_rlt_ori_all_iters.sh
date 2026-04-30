@@ -2,7 +2,13 @@
 # Offline rlt_ori eval across ALL ckpts in one run_dir.
 # Parallelizes across the GPU list, one ckpt per shard.
 #
-# Usage:
+# Usage (defaults work for Qwen-1traj-task0; override via env vars for
+# other runs):
+#   bash scripts/run_rl_scripts/run_eval_rlt_ori_all_iters.sh
+#
+#   RUN_DIR=results/rlt_ori_training/rlt_ori_rl_t0_release_pi05_5traj_0429_0924/rl_offpolicy \
+#   VLA_CKPT=results/training/Pi05-goal-5traj-openpi/checkpoints/steps_30000 \
+#   GPUS="0 1 2" TASK_IDS=0 \
 #   bash scripts/run_rl_scripts/run_eval_rlt_ori_all_iters.sh
 set -euo pipefail
 cd "${ALPHABRAIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
@@ -14,22 +20,22 @@ export LIBERO_HOME="${LIBERO_HOME:-/path/to/LIBERO}"
 export TOKENIZERS_PARALLELISM=false
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
-# ── Edit these before running ────────────────────────────────
-RUN_DIR="results/rlt_ori_training/rlt_ori_rl_t0_release_0423_1216/rl_offpolicy"
-VLA_CKPT="results/training/0324-zh-QwenOFT-1traj-libero_goal/final_model"
-GPUS=(5 6)                 # physical GPUs to use; ckpts round-robin across them
-N_EPS=50
-TASK_IDS="0"
-SUITE="libero_goal"
-NUM_WORKERS=4
+# ── Defaults (override via env) ──────────────────────────────
+RUN_DIR="${RUN_DIR:-results/rlt_ori_training/rlt_ori_rl_t0_release_0423_1216/rl_offpolicy}"
+VLA_CKPT="${VLA_CKPT:-results/training/0324-zh-QwenOFT-1traj-libero_goal/final_model}"
+read -r -a GPUS <<< "${GPUS:-5 6}"
+N_EPS="${N_EPS:-50}"
+TASK_IDS="${TASK_IDS:-0}"
+SUITE="${SUITE:-libero_goal}"
+NUM_WORKERS="${NUM_WORKERS:-4}"
 
 # Arch — matches run_rlt_ori_rl_task0_release.sh
-BOTTLENECK_DIM=2048
-ENCODER_LAYERS=2
-ENCODER_HEADS=8
-ACTOR_HIDDEN_DIM=512
-REF_DROPOUT=0.5
-FIXED_STD=0.1
+BOTTLENECK_DIM="${BOTTLENECK_DIM:-2048}"
+ENCODER_LAYERS="${ENCODER_LAYERS:-2}"
+ENCODER_HEADS="${ENCODER_HEADS:-8}"
+ACTOR_HIDDEN_DIM="${ACTOR_HIDDEN_DIM:-512}"
+REF_DROPOUT="${REF_DROPOUT:-0.5}"
+FIXED_STD="${FIXED_STD:-0.1}"
 # ─────────────────────────────────────────────────────────────
 
 if [ ! -d "${VLA_CKPT}" ]; then
