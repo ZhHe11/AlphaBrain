@@ -27,7 +27,7 @@ Checkpoints: `results/action_token_training_TD3/<run>_<ts>/rl_offpolicy/checkpoi
 ## Evaluate
 
 ```bash
-bash scripts/run_rl_scripts/run_eval_action_token.sh \
+bash scripts/run_rl_scripts/run_eval_rlt_a.sh \
     results/action_token_training_TD3/action_token_5traj_alltasks_release_0414_1727/rl_offpolicy
 ```
 

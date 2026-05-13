@@ -3,9 +3,9 @@
 # policy server + LIBERO client.
 #
 # Launch examples:
-#   bash scripts/run_base_vla/eval.sh pi05_goal_1traj_eval scripts/run_rl_scripts/pi05_eval.yaml
-#   bash scripts/run_base_vla/eval.sh pi05_goal_5traj_eval scripts/run_rl_scripts/pi05_eval.yaml
-#   bash scripts/run_base_vla/eval.sh pi05_goal_task0_eval scripts/run_rl_scripts/pi05_eval.yaml
+#   bash scripts/run_base_vla/eval.sh pi05_goal_1traj_eval scripts/run_rl_scripts/example_scripts/pi05_eval.yaml
+#   bash scripts/run_base_vla/eval.sh pi05_goal_5traj_eval scripts/run_rl_scripts/example_scripts/pi05_eval.yaml
+#   bash scripts/run_base_vla/eval.sh pi05_goal_task0_eval scripts/run_rl_scripts/example_scripts/pi05_eval.yaml
 #
 # Edit the `checkpoint:` line of the mode you want to eval before
 # launching (or override via `--cli-overrides`).

@@ -73,12 +73,11 @@ adapter is on the roadmap.
 ├── run_rlt_pretrain.sh        # Phase-1: RLT encoder pretrain
 ├── run_rlt_rl.sh              # Phase-2: TD3 RL on the RLT track (Qwen or Pi05)
 │
-├── pi05_eval.yaml             # configs for Pi05 VLA-only eval modes
 ├── run_eval_rlt.sh            # offline eval, RLT policy (single iter or all iters)
-├── run_eval_action_token.sh   # offline eval, RLT_a policy (Qwen only)
+├── run_eval_rlt_a.sh          # offline eval, RLT_a policy (Qwen only)
 │
 ├── example_results/           # reference plots / summaries
-└── example_scripts/           # legacy / one-off launchers
+└── example_scripts/           # legacy launchers + pi05_eval.yaml (VLA-only eval configs)
 ```
 
 (End-to-end `RLT_a` training launcher isn't in this dir; see
@@ -133,7 +132,8 @@ For the `RLT_a` track, see `AlphaBrain/training/reinforcement_learning/algos/RLT
 # VLA-only (no RL): policy server + LIBERO client. The yaml has one mode
 # block per finetune variant; edit `checkpoint:` to point at the desired
 # steps_X dir before running.
-bash scripts/run_base_vla/eval.sh pi05_goal_5traj_eval scripts/run_rl_scripts/pi05_eval.yaml
+bash scripts/run_base_vla/eval.sh pi05_goal_5traj_eval \
+    scripts/run_rl_scripts/example_scripts/pi05_eval.yaml
 
 # RLT offline eval: defaults to all iter ckpts under RUN_DIR, parallel
 # across GPUS. Pass ITER=00300 to eval one ckpt only.
@@ -143,7 +143,7 @@ GPUS="0 1 2" TASK_IDS=0 N_EPS=50 \
     bash scripts/run_rl_scripts/run_eval_rlt.sh
 
 # RLT_a offline eval (Qwen only): 10 tasks split across 3 GPUs
-bash scripts/run_rl_scripts/run_eval_action_token.sh <RUN_DIR>
+bash scripts/run_rl_scripts/run_eval_rlt_a.sh <RUN_DIR>
 ```
 
 ---
