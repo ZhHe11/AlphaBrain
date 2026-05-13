@@ -21,46 +21,26 @@ The repo ships two encoder/actor recipes side-by-side under
 
 ### Why `RLT_a` deviates from the paper
 
-We released `RLT_a` first because its two specific deviations matter for any
-team that wants to *use* the recipe rather than reproduce the paper:
+Two concrete reasons:
 
-1. **Multi-task scaling — language has to be in the loop.**
-   The paper's setup is per-task: each task gets its own encoder + actor,
-   and `RLT`'s footnote 1 explicitly drops the language tokens from the
-   encoder input ("each task has a fixed language instruction, so we
-   drop language embeddings"). That's fine when one actor only ever has
-   to do one task — language is constant.
-   In a multi-task setting (10 `libero_goal` tasks under one actor) the
-   actor *needs* to know which task it's on, and language is the natural
-   conditioning signal. `RLT_a` feeds the encoder the **action-query
-   slice**, which sits downstream of the VLA's image-language attention,
-   so the language signal is implicitly baked into every action-query
-   hidden state. The encoder doesn't have to re-attend to language
-   tokens — it's already conditioned. Same actor, all 10 tasks.
+1. **Language is in the loop — multi-task potential.**
+   `RLT` (per the paper's footnote 1) drops language tokens from the
+   encoder input on the assumption that each task has a fixed
+   instruction. That's fine for a single task but loses the natural
+   conditioning signal for multi-task training. `RLT_a` feeds the
+   encoder the action-query slice, which is already downstream of the
+   VLA's image-language attention — so language is implicitly baked
+   into every hidden state and the same actor can cover many tasks.
 
-2. **VLM-backbone integration cost — the encoder's surface area.**
-   `RLT`'s encoder consumes the **full VLM token sequence** `(L, H)`,
-   so adding a new VLA backbone is genuinely invasive:
-   - You have to understand that VLA's specific token layout — how it
-     interleaves image patches, language, special markers, action
-     placeholders — and write a backbone-specific feature extractor that
-     returns the right slice plus the right attention mask. Compare
-     `algos/RLT/vla_features.py` (Qwen, ~260 lines) against
-     `algos/RLT/vla_features_pi05_zhanghe.py` (Pi05, ~140 lines): two
-     largely independent implementations, written against two different
-     VLM forward signatures.
-   - The encoder must then be re-pretrained from scratch on that VLM's
-     tokens (no transfer — the `(L, H)` shape, positional embeddings,
-     and attention statistics all change).
-
-   `RLT_a`'s encoder consumes only the **action-query slice** `(M, H)`,
-   which is a much smaller and more uniform target. Adding a new VLA
-   only needs that backbone to expose its action-query hidden states
-   (one method on the framework) — no need to model the full token
-   layout. The encoder code itself doesn't change across backbones; the
-   per-VLM work is a small adapter. The extra `Linear(H → D=256)` further
-   keeps the downstream actor/critic at fixed width, so actor pretraining
-   and hyperparameters transfer across backbones too.
+2. **Encoder training is easier across VLMs.**
+   Action queries are exposed in roughly the same way by every VLA
+   (one `get_vla_action`-style call), so `RLT_a`'s encoder ports across
+   backbones with only a small adapter. `RLT`'s encoder consumes the
+   full VLM token sequence, which means each new VLA needs its own
+   feature-extraction code that understands that VLA's token layout
+   (cf. `algos/RLT/vla_features.py` for Qwen vs
+   `vla_features_pi05_zhanghe.py` for Pi05 — two largely independent
+   implementations).
 
 `RLT` is the more recent addition: it's closer to the paper's exact
 construction (full VLM tokens in, no extra projection, encoder-decoder
