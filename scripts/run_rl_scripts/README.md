@@ -24,24 +24,37 @@ The repo ships two encoder/actor recipes side-by-side under
 We released `RLT_a` first because its two specific deviations matter for any
 team that wants to *use* the recipe rather than reproduce the paper:
 
-1. **Multi-task scaling.** The paper's Phase-1 is a per-task setup; the
-   reconstruction target and the actor's reference action both come from a
-   single task's demo distribution. To train one actor that covers all
-   10 `libero_goal` tasks (or eventually more), we needed an encoder input
-   that's compact enough to share across tasks without blowing up the
-   actor/critic. The **action-query slice** `(M, H)` is shorter than the
-   full VLM stream `(L, H)` — the encoder sees `M=chunk_len=8` tokens
-   instead of hundreds — which keeps the per-task overhead small and the
-   downstream TD3 actor/critic well-conditioned in the multi-task setting.
+1. **Multi-task scaling — language has to be in the loop.**
+   The paper's setup is per-task: each task gets its own encoder + actor,
+   and `RLT`'s footnote 1 explicitly drops the language tokens from the
+   encoder input ("each task has a fixed language instruction, so we
+   drop language embeddings"). That's fine when one actor only ever has
+   to do one task — language is constant.
+   In a multi-task setting (10 `libero_goal` tasks under one actor) the
+   actor *needs* to know which task it's on, and language is the natural
+   conditioning signal. `RLT_a` feeds the encoder the **action-query
+   slice**, which sits downstream of the VLA's image-language attention,
+   so the language signal is implicitly baked into every action-query
+   hidden state. The encoder doesn't have to re-attend to language
+   tokens — it's already conditioned. Same actor, all 10 tasks.
 
-2. **VLM-backbone portability.** The paper keeps `z_rl ∈ ℝ^{1 × H}` at the
-   VLA's hidden dim (e.g. 2048 for Qwen2.5-VL, 2304 for π0.5/PaliGemma).
-   That couples the actor/critic input width to whichever VLA you pick.
-   `RLT_a` adds an explicit `Linear(H → D=256)` projection so the
-   actor/critic see a **fixed-width** RL token regardless of backbone.
-   Swapping Qwen ↔ Pi05 ↔ (future VLAs with different `H`) requires
-   re-pretraining the encoder but **not** redesigning the actor — the
-   same TD3 head ports over unchanged.
+2. **VLM-backbone portability — keep the actor independent of `H`.**
+   The paper keeps `z_rl ∈ ℝ^{1 × H}` at the VLA's hidden dim.
+   That dim varies per backbone: Qwen2.5-VL-3B has `H=2048`,
+   π0.5/PaliGemma has `H=2304`, future VLAs (Llama-VLA, Idefics, MiniCPM-VL,
+   etc.) span a wide range. With pure `RLT`, swapping VLA backbone
+   forces you to:
+   - Redesign the actor/critic input layer (different `H` → different
+     first-layer weight shape, can't reuse pretrained actor).
+   - Re-tune actor/critic depth and width, since "good" hidden sizes
+     scale with the input width.
+   - Repeat any hyperparameter sweep that depended on the input shape.
+
+   `RLT_a` inserts an explicit `Linear(H → D=256)` projection after the
+   encoder so the actor/critic see a **fixed `D=256` RL token regardless
+   of backbone**. Swapping Qwen ↔ Pi05 ↔ (anything else) only changes
+   the encoder side — the TD3 actor architecture, hyperparameters, and
+   pretrained weights port over unchanged.
 
 `RLT` is the more recent addition: it's closer to the paper's exact
 construction (full VLM tokens in, no extra projection, encoder-decoder
