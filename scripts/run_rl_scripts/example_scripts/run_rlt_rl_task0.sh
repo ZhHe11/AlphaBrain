@@ -1,8 +1,8 @@
 #!/bin/bash
-# RLT_ori Phase-2 TD3 on libero_goal task 0 (single task).
+# RLT Phase-2 TD3 on libero_goal task 0 (single task).
 # Reuses the RLActionToken TD3 pipeline, swaps the encoder family to
-# RLT_ori via --encoder_mode rlt_ori. Async BatchInferenceServer path
-# (no --use_steplock yet on the RLT_ori track).
+# RLT via --encoder_mode rlt. Async BatchInferenceServer path
+# (no --use_steplock yet on the RLT track).
 set -euo pipefail
 cd "${ALPHABRAIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
@@ -19,23 +19,23 @@ ROLLOUT_GPUS=${ROLLOUT_GPUS:-"0"}
 TRAIN_GPU=${TRAIN_GPU:-1}
 
 CKPT_PATH="results/training/0324-zh-QwenOFT-1traj-libero_goal/final_model"
-ENCODER_PATH="results/rlt_ori_training/1traj_libero_goal_step30k_0423_0545/pretrain/checkpoints/pretrain_best/encoder.pt"
+ENCODER_PATH="results/rlt_training/1traj_libero_goal_step30k_0423_0545/pretrain/checkpoints/pretrain_best/encoder.pt"
 
-RUN_NAME="rlt_ori_rl_task0"
+RUN_NAME="rlt_rl_task0"
 TIMESTAMP=$(date +%m%d_%H%M)
-OUTPUT_DIR="results/rlt_ori_training/${RUN_NAME}_${TIMESTAMP}/rl_offpolicy"
+OUTPUT_DIR="results/rlt_training/${RUN_NAME}_${TIMESTAMP}/rl_offpolicy"
 
 if [ ! -d "${CKPT_PATH}" ]; then
     echo "ERROR: VLA ckpt not found: ${CKPT_PATH}"
     exit 1
 fi
 if [ ! -f "${ENCODER_PATH}" ]; then
-    echo "ERROR: RLT_ori encoder not found: ${ENCODER_PATH}"
+    echo "ERROR: RLT encoder not found: ${ENCODER_PATH}"
     exit 1
 fi
 
 echo "============================================================"
-echo " RLT_ori Phase-2 TD3  (libero_goal task 0)"
+echo " RLT Phase-2 TD3  (libero_goal task 0)"
 echo "   rollout GPUs: ${ROLLOUT_GPUS}"
 echo "   train GPU:    ${TRAIN_GPU}"
 echo "   ckpt:         ${CKPT_PATH}"
@@ -47,7 +47,7 @@ export CUDA_VISIBLE_DEVICES=${GPU_IDS}
 
 python AlphaBrain/training/reinforcement_learning/trainers/train.py \
     --phase rl_offpolicy \
-    --encoder_mode rlt_ori \
+    --encoder_mode rlt \
     --ckpt_path ${CKPT_PATH} \
     --encoder_path ${ENCODER_PATH} \
     --output_dir ${OUTPUT_DIR} \

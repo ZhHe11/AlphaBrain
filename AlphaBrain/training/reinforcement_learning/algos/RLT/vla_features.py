@@ -150,7 +150,7 @@ def compact_by_mask(
     matrix exactly as described in Sec. IV-A.
 
     (An identical helper lives locally in
-    ``trainers/train_rlt_ori_pretrain.py`` — Phase-1 keeps its private
+    ``trainers/train_rlt_pretrain.py`` — Phase-1 keeps its private
     copy to avoid any retroactive change to that working path.)
     """
     B, L, H = last_hidden.shape
@@ -188,7 +188,7 @@ def get_vla_hidden_states_and_action(
 
     One VLM forward produces everything the downstream needs:
 
-      * ``last_hidden`` (B, L, H) and its masks — the inputs to the RLT_ori
+      * ``last_hidden`` (B, L, H) and its masks — the inputs to the RLT
         encoder, reshaped via :func:`compact_by_mask` by the caller.
       * ``action_queries`` (B, chunk_len, H) — gathered at action-placeholder
         positions, fed into the frozen ``action_model`` to produce the

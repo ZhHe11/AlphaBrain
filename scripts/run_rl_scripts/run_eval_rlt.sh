@@ -1,18 +1,18 @@
 #!/bin/bash
-# Offline eval for rlt_ori runs.
+# Offline eval for rlt runs.
 #
 # Why this exists:
 #   In-training eval_sr in metrics.json is computed via
 #   eval_helpers._eval_deterministic_local, which hard-codes the
 #   action-token encoder input (encoder.encode(action_queries)). For
-#   --encoder_mode rlt_ori that's the wrong input — rollout/training used
+#   --encoder_mode rlt that's the wrong input — rollout/training used
 #   compacted image hidden states — so the logged eval_sr is not a valid
 #   measurement of the trained policy. This script re-evals each ckpt
-#   through the correct rlt_ori path (eval_libero_rlt_ori.py).
+#   through the correct rlt path (eval_libero_rlt.py).
 #
 # Usage:
-#   bash scripts/run_rl_scripts/run_eval_rlt_ori.sh          # GPU 0
-#   bash scripts/run_rl_scripts/run_eval_rlt_ori.sh 1        # GPU 1
+#   bash scripts/run_rl_scripts/run_eval_rlt.sh          # GPU 0
+#   bash scripts/run_rl_scripts/run_eval_rlt.sh 1        # GPU 1
 set -euo pipefail
 cd "${ALPHABRAIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
@@ -29,16 +29,16 @@ GPU_ID=${1:-0}
 VLA_CKPT="results/training/0324-zh-QwenOFT-1traj-libero_goal/final_model"
 ITER="iter_00300"
 N_EPS=50
-TASK_IDS="0"           # rlt_ori release script trains only task 0
+TASK_IDS="0"           # rlt release script trains only task 0
 SUITE="libero_goal"
 NUM_WORKERS=4
 
 RUN_DIRS=(
-    "results/rlt_ori_training/rlt_ori_rl_t0_release_0423_1216/rl_offpolicy"
-    "results/rlt_ori_training/rlt_ori_rl_t0_G16_1_0423_1234/rl_offpolicy"
+    "results/rlt_training/rlt_rl_t0_release_0423_1216/rl_offpolicy"
+    "results/rlt_training/rlt_rl_t0_G16_1_0423_1234/rl_offpolicy"
 )
 
-# Arch — matches run_rlt_ori_rl_task0_release.sh
+# Arch — matches run_rlt_rl_task0_release.sh
 BOTTLENECK_DIM=2048
 ENCODER_LAYERS=2
 ENCODER_HEADS=8
@@ -57,7 +57,7 @@ export CUDA_VISIBLE_DEVICES=${GPU_ID}
 eval_one () {
     local run_dir=$1
     local ckpt="${run_dir}/checkpoints/rl_offpolicy_${ITER}"
-    local out_dir="${run_dir}/eval_${ITER}_rlt_ori"
+    local out_dir="${run_dir}/eval_${ITER}_rlt"
     local results_json="${out_dir}/summary.json"
     local log="${out_dir}/eval.log"
 
@@ -70,7 +70,7 @@ eval_one () {
     rm -f "${results_json}"
 
     echo "============================================================"
-    echo " rlt_ori offline eval"
+    echo " rlt offline eval"
     echo "   run_dir:  ${run_dir}"
     echo "   ckpt:     ${ckpt}"
     echo "   vla:      ${VLA_CKPT}"
@@ -79,7 +79,7 @@ eval_one () {
     echo "   out:      ${out_dir}"
     echo "============================================================"
 
-    python AlphaBrain/training/reinforcement_learning/eval/eval_libero_rlt_ori.py \
+    python AlphaBrain/training/reinforcement_learning/eval/eval_libero_rlt.py \
         --vla_ckpt "${VLA_CKPT}" \
         --action_token_ckpt "${ckpt}" \
         --suite "${SUITE}" \
@@ -104,6 +104,6 @@ done
 echo "============================================================"
 echo " All evals finished. Summaries:"
 for run_dir in "${RUN_DIRS[@]}"; do
-    echo "   ${run_dir}/eval_${ITER}_rlt_ori/summary.json"
+    echo "   ${run_dir}/eval_${ITER}_rlt/summary.json"
 done
 echo "============================================================"

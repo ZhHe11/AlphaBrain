@@ -1,5 +1,5 @@
 #!/bin/bash
-# RLT_ori Phase-1 pretraining (encoder-decoder reconstruction over
+# RLT Phase-1 pretraining (encoder-decoder reconstruction over
 # frozen VLA hidden states). Strict-reference mode: --image_only
 # keeps only image-token positions as z_{1:M} (Fig. 2, footnote 1).
 #
@@ -44,7 +44,7 @@ CKPT_PATH="${CKPT_PATH:-results/training/0324-zh-QwenOFT-1traj-libero_goal/final
 DEMO_CONFIG="${DEMO_CONFIG:-${CKPT_PATH}/framework_config.yaml}"
 
 TIMESTAMP=$(date +%m%d_%H%M)
-OUTPUT_DIR="results/rlt_ori_training/${RUN_TAG}_${TIMESTAMP}/pretrain"
+OUTPUT_DIR="results/rlt_training/${RUN_TAG}_${TIMESTAMP}/pretrain"
 
 if [ ! -d "${CKPT_PATH}" ]; then
     echo "ERROR: VLA ckpt not found: ${CKPT_PATH}"
@@ -59,7 +59,7 @@ else
 fi
 
 echo "============================================================"
-echo " RLT_ori Phase-1 pretrain  (GPU ${GPU_ID})"
+echo " RLT Phase-1 pretrain  (GPU ${GPU_ID})"
 echo "   ckpt:        ${CKPT_PATH}"
 echo "   demo cfg:    ${DEMO_CONFIG:-<none>}"
 echo "   budget:      max_steps=${MAX_STEPS}  epochs_cap=${EPOCHS}  batch=${BATCH_SIZE}"
@@ -68,7 +68,7 @@ echo "   output:      ${OUTPUT_DIR}"
 echo "============================================================"
 
 CUDA_VISIBLE_DEVICES=${GPU_ID} python AlphaBrain/training/reinforcement_learning/trainers/train.py \
-    --phase pretrain_rlt_ori \
+    --phase pretrain_rlt \
     --ckpt_path "${CKPT_PATH}" \
     --output_dir "${OUTPUT_DIR}" \
     ${DEMO_FLAG} \
@@ -87,13 +87,13 @@ CUDA_VISIBLE_DEVICES=${GPU_ID} python AlphaBrain/training/reinforcement_learning
     --seed ${SEED} \
     --use_wandb \
     --wandb_project AlphaBrain_RLT \
-    --run_name rlt_ori_pretrain_${RUN_TAG}
+    --run_name rlt_pretrain_${RUN_TAG}
 
 # ── how to change duration ───────────────────────────────────────────────
-# step-budget (paper-like):    MAX_STEPS=30000  bash scripts/run_rl_scripts/run_rlt_ori_pretrain.sh 0
-# quick smoke:                 MAX_STEPS=500    bash scripts/run_rl_scripts/run_rlt_ori_pretrain.sh 0
-# pure-epoch mode:             MAX_STEPS=0 EPOCHS=50  bash scripts/run_rl_scripts/run_rlt_ori_pretrain.sh 0
+# step-budget (paper-like):    MAX_STEPS=30000  bash scripts/run_rl_scripts/run_rlt_pretrain.sh 0
+# quick smoke:                 MAX_STEPS=500    bash scripts/run_rl_scripts/run_rlt_pretrain.sh 0
+# pure-epoch mode:             MAX_STEPS=0 EPOCHS=50  bash scripts/run_rl_scripts/run_rlt_pretrain.sh 0
 # joint VLA SFT:               ALPHA_VLA=1.0 MAX_STEPS=20000 bash ...
 # 5-traj ckpt:                 CKPT_PATH=results/training/QwenOFT-5traj-libero_goal/final_model \
 #                              RUN_TAG=5traj_libero_goal MAX_STEPS=30000 \
-#                              bash scripts/run_rl_scripts/run_rlt_ori_pretrain.sh 0
+#                              bash scripts/run_rl_scripts/run_rlt_pretrain.sh 0

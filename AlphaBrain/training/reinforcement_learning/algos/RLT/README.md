@@ -1,4 +1,4 @@
-# RLT_ori — Reference-Faithful RL Token Encoder-Decoder
+# RLT — Reference-Faithful RL Token Encoder-Decoder
 
 This module implements the encoder-decoder and Phase-1 reconstruction
 training of the **RL Token** recipe (Physical Intelligence, 2026) as
@@ -22,8 +22,8 @@ deviations.
 | `__init__.py`       | Re-exports the public surface |
 
 Phase-1 pretraining lives one level up in
-`trainers/train_rlt_ori_pretrain.py` and is selected via
-`--phase pretrain_rlt_ori`.
+`trainers/train_rlt_pretrain.py` and is selected via
+`--phase pretrain_rlt`.
 
 ---
 
@@ -116,14 +116,14 @@ which **is** a deviation — noted in the help text.
 
 ```bash
 # Frozen VLA, demo-driven, reference-faithful:
-bash scripts/run_rl_scripts/run_rlt_ori_pretrain.sh 0
+bash scripts/run_rl_scripts/run_rlt_pretrain.sh 0
 
 # Or directly:
 python AlphaBrain/training/reinforcement_learning/trainers/train.py \
-    --phase pretrain_rlt_ori \
+    --phase pretrain_rlt \
     --ckpt_path results/training/QwenOFT-5traj-libero_goal/final_model \
     --demo_config benchmarks/LIBERO/train/alphabrain_neurovla_libero.yaml \
-    --output_dir results/rlt_ori_training/pretrain \
+    --output_dir results/rlt_training/pretrain \
     --suite libero_goal --all_tasks \
     --encoder_layers 2 --decoder_layers 2 --encoder_heads 8 \
     --pretrain_lr 1e-4 --pretrain_batch_size 8 --pretrain_epochs 50 \
@@ -135,15 +135,15 @@ Enable the joint VLA fine-tune (Algorithm 1, line 3) with e.g.
 
 ### Phase-2 (TD3 with frozen VLA + frozen encoder + trainable actor/critic)
 
-Reuses the production Phase-2 trainer with `--encoder_mode rlt_ori`:
+Reuses the production Phase-2 trainer with `--encoder_mode rlt`:
 
 ```bash
 # Qwen backbone:
-bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release.sh 0
+bash scripts/run_rl_scripts/run_rlt_rl_task0_release.sh 0
 
 # Pi05 backbone (1traj or 5traj):
-VARIANT=1traj TASK_ID=0 bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh 0
-VARIANT=5traj TASK_ID=3 bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh 0
+VARIANT=1traj TASK_ID=0 bash scripts/run_rl_scripts/run_rlt_rl_task0_release_pi05.sh 0
+VARIANT=5traj TASK_ID=3 bash scripts/run_rl_scripts/run_rlt_rl_task0_release_pi05.sh 0
 ```
 
 The best encoder-decoder checkpoint lands at:
@@ -162,13 +162,13 @@ match at load time.
 
 ## Relationship to `RLActionToken/`
 
-| | `RLActionToken` (production) | `RLT_ori` (this module) |
+| | `RLActionToken` (production) | `RLT` (this module) |
 |---|---|---|
 | Encoder input | Action-query slice `(B, M=chunk_len, H)` | Full VLM tokens `(B, L, H)` |
 | z_rl width | Projected to `D = 256` | Kept at VLA hidden dim `H` |
 | Decoder | Self-attention, causal, `z_rl` prefix | Encoder-decoder cross-attention, causal target, `z_rl` memory |
 | Phase-1 data | Random-rollout observations | Demonstrations (fallback: rollouts) |
 | Joint VLA SFT | Not in Phase-1 | `α L_vla` term (Algorithm 1, line 3) |
-| Phase 2 (actor/critic, TD3) | Shipped | Reuses the same Phase-2 trainer via `--encoder_mode rlt_ori` |
+| Phase 2 (actor/critic, TD3) | Shipped | Reuses the same Phase-2 trainer via `--encoder_mode rlt` |
 
 Both live side-by-side; pick whichever matches your study's goal.

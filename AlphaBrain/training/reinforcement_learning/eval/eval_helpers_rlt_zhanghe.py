@@ -1,14 +1,14 @@
-"""Deterministic eval helper for `--encoder_mode rlt_ori`.
+"""Deterministic eval helper for `--encoder_mode rlt`.
 
 The shared `eval_helpers._eval_deterministic_local` hard-codes the
 action-token encoder input (`encoder.encode(action_queries)`), which is
-wrong for encoders trained via the rlt_ori path — rollout/training feed
+wrong for encoders trained via the rlt path — rollout/training feed
 those encoders compacted image hidden states, not action_queries. Using
 the action-token path at eval time produces garbage RL tokens and
 systematically low eval SR even when rollout SR is high.
 
 This helper mirrors `_eval_deterministic_local` one-for-one but swaps
-the RL token construction to match the rlt_ori rollout path in
+the RL token construction to match the rlt rollout path in
 ``action_token_trainer.BatchInferenceServer._loop`` (encoder_mode branch):
 
     last_hidden, encoder_mask, _, _, vla_actions = \
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 @torch.no_grad()
-def _eval_deterministic_local_rlt_ori(
+def _eval_deterministic_local_rlt(
     frozen_vla,
     encoder,   # RLTokenEncoderDecoder
     actor,     # ActionTokenActor
@@ -45,7 +45,7 @@ def _eval_deterministic_local_rlt_ori(
     rank: int = 0,
     video_dir=None,
 ) -> list:
-    """rlt_ori twin of eval_helpers._eval_deterministic_local.
+    """rlt twin of eval_helpers._eval_deterministic_local.
 
     Returns: list of (ep_idx, state_idx, success) tuples, one per episode
     in `episode_indices`.
@@ -71,7 +71,7 @@ def _eval_deterministic_local_rlt_ori(
     n_eps_total = len(episode_indices)
     report_every = max(1, n_eps_total // 5)
 
-    print(f"  [eval-rlt_ori] task {task_id} rank {rank}: start — {n_eps_total} eps",
+    print(f"  [eval-rlt] task {task_id} rank {rank}: start — {n_eps_total} eps",
           flush=True)
 
     results = []
@@ -105,10 +105,10 @@ def _eval_deterministic_local_rlt_ori(
                         np.array(obs["state"], dtype=np.float32)
                     ).unsqueeze(0).to(device)
 
-                    from AlphaBrain.training.reinforcement_learning.algos.RLT_ori.pi05_inference_zhanghe import (
-                        run_rlt_ori_inference,
+                    from AlphaBrain.training.reinforcement_learning.algos.RLT.pi05_inference_zhanghe import (
+                        run_rlt_inference,
                     )
-                    rl_token, vla_actions = run_rlt_ori_inference(
+                    rl_token, vla_actions = run_rlt_inference(
                         frozen_vla, encoder, images, [task_desc], prop_state,
                     )
 
@@ -142,7 +142,7 @@ def _eval_deterministic_local_rlt_ori(
             done_i = local_i + 1
             if done_i % report_every == 0 or done_i == n_eps_total:
                 running_sr = n_success / done_i
-                print(f"  [eval-rlt_ori] task {task_id} rank {rank}: {done_i}/{n_eps_total}"
+                print(f"  [eval-rlt] task {task_id} rank {rank}: {done_i}/{n_eps_total}"
                       f"  running SR={running_sr:.2%}  (last ep {ep_idx} "
                       f"{'SUCCESS' if success else 'fail'})",
                       flush=True)

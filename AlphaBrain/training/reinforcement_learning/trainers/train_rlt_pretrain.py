@@ -38,7 +38,7 @@ from AlphaBrain.training.reinforcement_learning.envs.libero_env import (
     MAX_STEPS,
     get_suite_info,
 )
-from AlphaBrain.training.reinforcement_learning.algos.RLT_ori import (
+from AlphaBrain.training.reinforcement_learning.algos.RLT import (
     RLTokenEncoderDecoder,
     get_vla_hidden_states,
     pad_mask_from_attention,
@@ -152,7 +152,7 @@ def _forward_recon_loss(
             drop_action_tokens=drop_action_tokens,
         )
     else:
-        from AlphaBrain.training.reinforcement_learning.algos.RLT_ori.vla_features_pi05_zhanghe import (
+        from AlphaBrain.training.reinforcement_learning.algos.RLT.vla_features_pi05_zhanghe import (
             get_vla_hidden_states_pi05,
         )
         last_hidden, attention_mask, _action_mask = get_vla_hidden_states_pi05(
@@ -221,8 +221,8 @@ def _forward_vla_loss(vla, demo_batch) -> torch.Tensor:
 # Top-level phase
 # -----------------------------------------------------------------------------
 
-def run_rlt_ori_pretrain(args):
-    """Entry point for ``--phase pretrain_rlt_ori``."""
+def run_rlt_pretrain(args):
+    """Entry point for ``--phase pretrain_rlt``."""
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -263,7 +263,7 @@ def run_rlt_ori_pretrain(args):
         if hidden_dim is None:
             raise RuntimeError(
                 f"Cannot determine VLM hidden_size for {type(vla).__name__}; "
-                f"add explicit branch in train_rlt_ori_pretrain.run_rlt_ori_pretrain."
+                f"add explicit branch in train_rlt_pretrain.run_rlt_pretrain."
             )
     chunk_len = vla.chunk_len
 
@@ -279,7 +279,7 @@ def run_rlt_ori_pretrain(args):
 
     n_params = sum(p.numel() for p in enc_dec.parameters())
     logger.info(
-        f"RLT_ori Encoder-Decoder: {n_params / 1e6:.2f}M params, "
+        f"RLT Encoder-Decoder: {n_params / 1e6:.2f}M params, "
         f"hidden_dim={hidden_dim}, chunk_len={chunk_len}"
     )
 
@@ -299,7 +299,7 @@ def run_rlt_ori_pretrain(args):
 
     # WandB
     if args.use_wandb:
-        run_name = args.run_name or f"rlt_ori_pretrain_{args.suite}"
+        run_name = args.run_name or f"rlt_pretrain_{args.suite}"
         wandb.init(project=args.wandb_project, name=run_name, config=vars(args))
 
     # Suite metadata (used only by rollout fallback)

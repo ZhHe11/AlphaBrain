@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Offline eval for an RL Token (rlt_ori) iter checkpoint on LIBERO.
+"""Offline eval for an RL Token (rlt) iter checkpoint on LIBERO.
 
-This is the rlt_ori twin of ``eval_libero.py``. The in-training eval path
+This is the rlt twin of ``eval_libero.py``. The in-training eval path
 (``eval_helpers._eval_deterministic_local``) hard-codes the action-token
 encoder input (``encoder.encode(action_queries)``) and therefore produces
-meaningless numbers for encoders trained via ``--encoder_mode rlt_ori``,
+meaningless numbers for encoders trained via ``--encoder_mode rlt``,
 whose rollout path feeds compacted image hidden states through
 ``get_vla_hidden_states_and_action(image_only=True) -> compact_by_mask
 -> encoder.encode(dense, key_padding_mask=kp_mask)``.
@@ -32,7 +32,7 @@ import torch
 from AlphaBrain.model.framework.base_framework import BaseFramework
 from AlphaBrain.training.reinforcement_learning.envs.libero_env import MAX_STEPS, get_suite_info
 from AlphaBrain.training.reinforcement_learning.algos.RLActionToken.action_token_actor_critic import ActionTokenActor
-from AlphaBrain.training.reinforcement_learning.algos.RLT_ori import (
+from AlphaBrain.training.reinforcement_learning.algos.RLT import (
     RLTokenEncoderDecoder,
 )
 
@@ -41,13 +41,13 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--vla_ckpt", required=True, help="QwenOFT SFT base checkpoint dir")
     p.add_argument("--action_token_ckpt", required=True,
-                   help="rlt_ori iter ckpt dir containing encoder.pt and actor.pt")
+                   help="rlt iter ckpt dir containing encoder.pt and actor.pt")
     p.add_argument("--suite", default="libero_goal")
     p.add_argument("--n_eps_per_task", type=int, default=50)
     p.add_argument("--gpu", type=int, default=0)
-    # rlt_ori arch defaults — match scripts/run_rl_scripts/run_rlt_ori_rl_task0_release.sh
+    # rlt arch defaults — match scripts/run_rl_scripts/run_rlt_rl_task0_release.sh
     p.add_argument("--bottleneck_dim", type=int, default=2048,
-                   help="rlt_ori encoder hidden_dim (must equal VLA hidden_size)")
+                   help="rlt encoder hidden_dim (must equal VLA hidden_size)")
     p.add_argument("--encoder_layers", type=int, default=2)
     p.add_argument("--encoder_heads", type=int, default=8)
     p.add_argument("--max_len", type=int, default=4096)
@@ -69,7 +69,7 @@ def parse_args():
 
 
 @torch.no_grad()
-def _eval_one_task_rlt_ori(
+def _eval_one_task_rlt(
     frozen_vla,
     encoder: RLTokenEncoderDecoder,
     actor: ActionTokenActor,
@@ -85,7 +85,7 @@ def _eval_one_task_rlt_ori(
     rank: int = 0,
     video_dir=None,
 ) -> list:
-    """Deterministic eval for rlt_ori — mirrors _eval_deterministic_local but
+    """Deterministic eval for rlt — mirrors _eval_deterministic_local but
     builds ``rl_token`` via the image-only / compact-by-mask path so the
     encoder sees the same inputs it saw during training rollouts.
     """
@@ -107,7 +107,7 @@ def _eval_one_task_rlt_ori(
 
     n_eps_total = len(episode_indices)
     report_every = max(1, n_eps_total // 5)
-    print(f"  [eval-rlt_ori] task {task_id} rank {rank}: start — {n_eps_total} eps",
+    print(f"  [eval-rlt] task {task_id} rank {rank}: start — {n_eps_total} eps",
           flush=True)
 
     results = []
@@ -140,10 +140,10 @@ def _eval_one_task_rlt_ori(
                     prop_state = torch.tensor(
                         np.array(obs["state"], dtype=np.float32)
                     ).unsqueeze(0).to(device)
-                    from AlphaBrain.training.reinforcement_learning.algos.RLT_ori.pi05_inference_zhanghe import (
-                        run_rlt_ori_inference,
+                    from AlphaBrain.training.reinforcement_learning.algos.RLT.pi05_inference_zhanghe import (
+                        run_rlt_inference,
                     )
-                    rl_token, vla_actions = run_rlt_ori_inference(
+                    rl_token, vla_actions = run_rlt_inference(
                         frozen_vla, encoder, images, [task_desc], prop_state,
                     )
 
@@ -177,7 +177,7 @@ def _eval_one_task_rlt_ori(
             done_i = local_i + 1
             if done_i % report_every == 0 or done_i == n_eps_total:
                 running_sr = n_success / done_i
-                print(f"  [eval-rlt_ori] task {task_id} rank {rank}: {done_i}/{n_eps_total}"
+                print(f"  [eval-rlt] task {task_id} rank {rank}: {done_i}/{n_eps_total}"
                       f"  running SR={running_sr:.2%}  (last ep {ep_idx} "
                       f"{'SUCCESS' if success else 'fail'})",
                       flush=True)
@@ -198,7 +198,7 @@ def main():
     for p in frozen_vla.parameters():
         p.requires_grad_(False)
 
-    from AlphaBrain.training.reinforcement_learning.algos.RLT_ori.pi05_inference_zhanghe import (
+    from AlphaBrain.training.reinforcement_learning.algos.RLT.pi05_inference_zhanghe import (
         is_pi05, resolve_vla_metadata,
     )
     hidden_dim, action_norm_stats, chunk_len, action_dim = resolve_vla_metadata(frozen_vla)
@@ -208,7 +208,7 @@ def main():
 
     if args.bottleneck_dim != hidden_dim:
         print(f"WARNING: --bottleneck_dim={args.bottleneck_dim} != VLA hidden_dim={hidden_dim}; "
-              f"rlt_ori encoder hidden_dim must equal VLA hidden_dim. Overriding.")
+              f"rlt encoder hidden_dim must equal VLA hidden_dim. Overriding.")
         args.bottleneck_dim = hidden_dim
 
     print(f"Loading encoder from {args.action_token_ckpt}/encoder.pt")
@@ -276,7 +276,7 @@ def main():
             video_dir_t = (os.path.join(args.video_dir, f"task_{tid:02d}")
                            if args.video_dir else None)
             fut = pool.submit(
-                _eval_one_task_rlt_ori,
+                _eval_one_task_rlt,
                 frozen_vla=frozen_vla,
                 encoder=encoder,
                 actor=actor,
@@ -320,7 +320,7 @@ def main():
             "vla_ckpt": args.vla_ckpt,
             "suite": args.suite,
             "n_eps_per_task": args.n_eps_per_task,
-            "encoder_mode": "rlt_ori",
+            "encoder_mode": "rlt",
             "per_task_sr": {int(k): float(v) for k, v in per_task_sr.items()},
             "overall_sr": float(overall_sr),
         }

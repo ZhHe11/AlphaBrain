@@ -1,15 +1,15 @@
 #!/bin/bash
-# Single-task RLT_ori release config — port of
+# Single-task RLT release config — port of
 # /share/zhanghe/VLA-Engine-Developer/scripts/run_rlt_1traj_task0_release.sh
-# (TD3 off-policy hyperparams), but with the RLT_ori encoder family
-# (--encoder_mode rlt_ori, bottleneck=2048, heads=8).
+# (TD3 off-policy hyperparams), but with the RLT encoder family
+# (--encoder_mode rlt, bottleneck=2048, heads=8).
 #
 # Phase-1 (encoder pretrain) is NOT auto-run here — produce the encoder
-# first via scripts/run_rl_scripts/run_rlt_ori_pretrain.sh and point
+# first via scripts/run_rl_scripts/run_rlt_pretrain.sh and point
 # ENCODER_PATH at it (override below or via env var).
 #
 # Usage:
-#   bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release.sh [GPU_ID]
+#   bash scripts/run_rl_scripts/run_rlt_rl_task0_release.sh [GPU_ID]
 set -euo pipefail
 cd "${ALPHABRAIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
@@ -25,11 +25,11 @@ GPU_ID=${1:-0}
 TASK_ID=${TASK_ID:-0}
 
 CKPT_PATH="results/training/QwenOFT-5traj-libero_goal/final_model"
-ENCODER_PATH="results/rlt_ori_training/5traj_libero_goal_0425_1322/pretrain/checkpoints/pretrain_best/encoder.pt"
+ENCODER_PATH="results/rlt_training/5traj_libero_goal_0425_1322/pretrain/checkpoints/pretrain_best/encoder.pt"
 
-RUN_NAME="rlt_ori_rl_t${TASK_ID}_release"
+RUN_NAME="rlt_rl_t${TASK_ID}_release"
 TIMESTAMP=$(date +%m%d_%H%M)
-OUTPUT_DIR="results/rlt_ori_training/${RUN_NAME}_${TIMESTAMP}/rl_offpolicy"
+OUTPUT_DIR="results/rlt_training/${RUN_NAME}_${TIMESTAMP}/rl_offpolicy"
 mkdir -p "${OUTPUT_DIR}"
 TRAIN_LOG="${OUTPUT_DIR}/train.log"
 
@@ -38,13 +38,13 @@ if [ ! -d "${CKPT_PATH}" ]; then
     exit 1
 fi
 if [ ! -f "${ENCODER_PATH}" ]; then
-    echo "ERROR: RLT_ori encoder not found: ${ENCODER_PATH}"
-    echo "       Run scripts/run_rl_scripts/run_rlt_ori_pretrain.sh first."
+    echo "ERROR: RLT encoder not found: ${ENCODER_PATH}"
+    echo "       Run scripts/run_rl_scripts/run_rlt_pretrain.sh first."
     exit 1
 fi
 
 echo "============================================================"
-echo " RLT_ori Phase-2 TD3 (release config, libero_goal task ${TASK_ID})"
+echo " RLT Phase-2 TD3 (release config, libero_goal task ${TASK_ID})"
 echo "   GPU:        ${GPU_ID}"
 echo "   ckpt:       ${CKPT_PATH}"
 echo "   encoder:    ${ENCODER_PATH}"
@@ -55,7 +55,7 @@ export CUDA_VISIBLE_DEVICES=${GPU_ID}
 
 python AlphaBrain/training/reinforcement_learning/trainers/train.py \
     --phase rl_offpolicy \
-    --encoder_mode rlt_ori \
+    --encoder_mode rlt \
     --ckpt_path ${CKPT_PATH} \
     --encoder_path ${ENCODER_PATH} \
     --output_dir ${OUTPUT_DIR} \

@@ -83,7 +83,7 @@ class BatchInferenceServer:
         self.actor_chunk_len = actor_chunk_len
         # Encoder input mode:
         #   "action_token": feed encoder the chunk_len action-query slice (default).
-        #   "rlt_ori":      feed encoder the full last_hidden image-token slice
+        #   "rlt":      feed encoder the full last_hidden image-token slice
         #                   (z_{1:M} from the RL Token reference, Eq. 1).
         #   Both produce a rl_token of shape (B, 1, encoder.hidden_dim).
         self.encoder_mode = encoder_mode
@@ -160,11 +160,11 @@ class BatchInferenceServer:
                 else:
                     props_t = None
 
-                if self.encoder_mode == "rlt_ori":
+                if self.encoder_mode == "rlt":
                     # Pi05 (PaliGemmaPi05) takes a different inference path
                     # entirely (no in-stream action tokens; action chunk comes
                     # from the flow-matching head). Dispatch on framework type.
-                    from AlphaBrain.training.reinforcement_learning.algos.RLT_ori.pi05_inference_zhanghe import (
+                    from AlphaBrain.training.reinforcement_learning.algos.RLT.pi05_inference_zhanghe import (
                         is_pi05, get_pi05_rl_state_and_action,
                     )
                     if is_pi05(self.frozen_vla):
@@ -179,10 +179,10 @@ class BatchInferenceServer:
                         # doesn't NameError.
                         action_queries = None
                     else:
-                        # Qwen rlt_ori: one VLM forward gives full hidden +
+                        # Qwen rlt: one VLM forward gives full hidden +
                         # action_queries + vla_actions; compact image-token
-                        # slice into z_{1:M} and feed RLT_ori encoder.
-                        from AlphaBrain.training.reinforcement_learning.algos.RLT_ori import (
+                        # slice into z_{1:M} and feed RLT encoder.
+                        from AlphaBrain.training.reinforcement_learning.algos.RLT import (
                             get_vla_hidden_states_and_action,
                             compact_by_mask,
                             pad_mask_from_attention,

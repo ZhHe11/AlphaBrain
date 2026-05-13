@@ -25,8 +25,8 @@ from accelerate.utils import set_seed
 from AlphaBrain.model.framework.base_framework import BaseFramework
 from AlphaBrain.training.reinforcement_learning.common.ckpt_io import save_rlt_checkpoint
 from AlphaBrain.training.reinforcement_learning.eval.eval_helpers import _eval_deterministic_local
-from AlphaBrain.training.reinforcement_learning.eval.eval_helpers_rlt_ori_zhanghe import (
-    _eval_deterministic_local_rlt_ori,
+from AlphaBrain.training.reinforcement_learning.eval.eval_helpers_rlt_zhanghe import (
+    _eval_deterministic_local_rlt,
 )
 from AlphaBrain.training.reinforcement_learning.envs.libero_env import MAX_STEPS, get_suite_info
 from AlphaBrain.training.reinforcement_learning.common.replay_buffer import ReplayBuffer
@@ -102,7 +102,7 @@ def run_rl_offpolicy(args):
 
     # Backbone-agnostic metadata (Qwen vs Pi05): hidden_dim, action_norm_stats,
     # chunk_len, action_dim. See pi05_inference_zhanghe.resolve_vla_metadata.
-    from AlphaBrain.training.reinforcement_learning.algos.RLT_ori.pi05_inference_zhanghe import (
+    from AlphaBrain.training.reinforcement_learning.algos.RLT.pi05_inference_zhanghe import (
         is_pi05, resolve_vla_metadata,
     )
     ref_vla = vla_copies[rollout_gpu_ids[0]]
@@ -133,18 +133,18 @@ def run_rl_offpolicy(args):
 
     # ── Create trainable modules on train_gpu ────────────
     encoder_mode = getattr(args, "encoder_mode", "action_token")
-    if encoder_mode == "rlt_ori":
+    if encoder_mode == "rlt":
         # RL Token reference track: z_rl kept at VLA hidden dim (no extra
         # bottleneck projection). --bottleneck_dim here is repurposed as
         # the encoder's hidden_dim and should equal the VLA's hidden_size
         # (2048 for Qwen2.5-VL-3B).
-        from AlphaBrain.training.reinforcement_learning.algos.RLT_ori import (
+        from AlphaBrain.training.reinforcement_learning.algos.RLT import (
             RLTokenEncoderDecoder,
         )
         if args.bottleneck_dim != hidden_dim:
             logger.warning(
                 f"  --bottleneck_dim={args.bottleneck_dim} != VLA hidden_dim={hidden_dim}; "
-                f"RLT_ori encoder uses VLA hidden dim. Overriding bottleneck_dim."
+                f"RLT encoder uses VLA hidden dim. Overriding bottleneck_dim."
             )
             args.bottleneck_dim = hidden_dim
         enc_dec = RLTokenEncoderDecoder(
@@ -154,9 +154,9 @@ def run_rl_offpolicy(args):
             decoder_layers=getattr(args, "decoder_layers", args.encoder_layers),
             max_len=getattr(args, "max_len", 4096),
         ).to(train_device)
-        # rlt_ori + steplock: now supported via the encoder_mode kwarg on
+        # rlt + steplock: now supported via the encoder_mode kwarg on
         # action_token_collect_*_steplock (we pass it through below). The
-        # rollout-fast loop dispatches to the rlt_ori encoder path internally.
+        # rollout-fast loop dispatches to the rlt encoder path internally.
     else:
         enc_dec = ActionTokenEncoderDecoder(
             input_dim=hidden_dim,
@@ -412,11 +412,11 @@ def run_rl_offpolicy(args):
         per_task_eval_sr_local = {}
         eval_result_local = None
         # Route eval through the encoder-mode-matching helper. The default
-        # helper's encoder.encode(action_queries) path is wrong for rlt_ori
+        # helper's encoder.encode(action_queries) path is wrong for rlt
         # encoders (trained on compacted image hidden states) and silently
         # gives low SR even when rollout SR is high.
-        _eval_fn = (_eval_deterministic_local_rlt_ori
-                    if encoder_mode == "rlt_ori"
+        _eval_fn = (_eval_deterministic_local_rlt
+                    if encoder_mode == "rlt"
                     else _eval_deterministic_local)
 
         if args.all_tasks:

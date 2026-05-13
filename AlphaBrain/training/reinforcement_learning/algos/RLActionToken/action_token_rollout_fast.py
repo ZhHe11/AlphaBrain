@@ -40,20 +40,20 @@ def _run_vla_and_encode(
 ):
     """One fused VLA forward + RL-token encoding for the rollout step.
 
-    Dispatches on ``encoder_mode`` and (for ``rlt_ori``) on Qwen vs Pi05
+    Dispatches on ``encoder_mode`` and (for ``rlt``) on Qwen vs Pi05
     backbone. Returns ``(rl_tokens, vla_actions, action_queries)`` —
-    ``action_queries`` is ``None`` for the Pi05 rlt_ori path which has
+    ``action_queries`` is ``None`` for the Pi05 rlt path which has
     no in-stream action tokens.
     """
-    if encoder_mode == "rlt_ori":
-        from AlphaBrain.training.reinforcement_learning.algos.RLT_ori.pi05_inference_zhanghe import (
-            run_rlt_ori_inference,
+    if encoder_mode == "rlt":
+        from AlphaBrain.training.reinforcement_learning.algos.RLT.pi05_inference_zhanghe import (
+            run_rlt_inference,
         )
-        rl_tokens, vla_actions = run_rlt_ori_inference(
+        rl_tokens, vla_actions = run_rlt_inference(
             frozen_vla, encoder, batch_images, batch_instrs, props_t,
         )
-        # action_queries unused on the rlt_ori path (Pi05 has none; Qwen
-        # path discards them inside run_rlt_ori_inference).
+        # action_queries unused on the rlt path (Pi05 has none; Qwen
+        # path discards them inside run_rlt_inference).
         return rl_tokens, vla_actions, None
 
     # action_token mode: encoder takes the action-query slice directly.

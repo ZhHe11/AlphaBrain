@@ -1,17 +1,17 @@
 #!/bin/bash
-# Pi05 (PaliGemmaPi05) RLT_ori Phase-2 TD3 launcher.
+# Pi05 (PaliGemmaPi05) RLT Phase-2 TD3 launcher.
 # Same hyperparams + steplock for both 1traj and 5traj variants; only the
 # VLA backbone and Phase-1 encoder differ.
 #
 # Phase-2 RL is wired through the Pi05 inference adapter
-# (algos/RLT_ori/pi05_inference_zhanghe.py) which runs PaliGemma's prefix
+# (algos/RLT/pi05_inference_zhanghe.py) which runs PaliGemma's prefix
 # Gemma forward + flow-matching diffusion in a single fused call per
 # rollout step. Trainer/rollout/eval all dispatch on framework type
 # (is_pi05) — no behavior change for Qwen runs.
 #
 # Usage:
-#   VARIANT=1traj TASK_ID=0 bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh [GPU_ID]
-#   VARIANT=5traj TASK_ID=3 bash scripts/run_rl_scripts/run_rlt_ori_rl_task0_release_pi05.sh [GPU_ID]
+#   VARIANT=1traj TASK_ID=0 bash scripts/run_rl_scripts/run_rlt_rl_task0_release_pi05.sh [GPU_ID]
+#   VARIANT=5traj TASK_ID=3 bash scripts/run_rl_scripts/run_rlt_rl_task0_release_pi05.sh [GPU_ID]
 #
 # Env overrides:
 #   VARIANT      1traj|5traj  (default 1traj)
@@ -46,15 +46,15 @@ fi
 # Latest pretrain dir for this variant (timestamp-suffixed); pick the most
 # recent one matching the prefix unless caller overrides ENCODER_PATH.
 DEFAULT_CKPT="results/training/Pi05-goal-${VARIANT}-openpi/checkpoints/steps_30000"
-DEFAULT_PRETRAIN_DIR=$(ls -td results/rlt_ori_training/pi05_${VARIANT}_openpi_strict_*/pretrain 2>/dev/null | head -1 || true)
+DEFAULT_PRETRAIN_DIR=$(ls -td results/rlt_training/pi05_${VARIANT}_openpi_strict_*/pretrain 2>/dev/null | head -1 || true)
 DEFAULT_ENCODER="${DEFAULT_PRETRAIN_DIR:+${DEFAULT_PRETRAIN_DIR}/checkpoints/pretrain_best/encoder.pt}"
 
 CKPT_PATH="${CKPT_PATH:-${DEFAULT_CKPT}}"
 ENCODER_PATH="${ENCODER_PATH:-${DEFAULT_ENCODER}}"
 
-RUN_NAME="rlt_ori_rl_t${TASK_ID}_release_pi05_${VARIANT}"
+RUN_NAME="rlt_rl_t${TASK_ID}_release_pi05_${VARIANT}"
 TIMESTAMP=$(date +%m%d_%H%M)
-OUTPUT_DIR="results/rlt_ori_training/${RUN_NAME}_${TIMESTAMP}/rl_offpolicy"
+OUTPUT_DIR="results/rlt_training/${RUN_NAME}_${TIMESTAMP}/rl_offpolicy"
 mkdir -p "${OUTPUT_DIR}"
 TRAIN_LOG="${OUTPUT_DIR}/train.log"
 
@@ -63,13 +63,13 @@ if [ ! -d "${CKPT_PATH}" ]; then
     exit 1
 fi
 if [ -z "${ENCODER_PATH}" ] || [ ! -f "${ENCODER_PATH}" ]; then
-    echo "ERROR: RLT_ori encoder not found: ${ENCODER_PATH:-<unset>}"
+    echo "ERROR: RLT encoder not found: ${ENCODER_PATH:-<unset>}"
     echo "       (Pi05 ${VARIANT} Phase-1 may still be running.)"
     exit 1
 fi
 
 echo "============================================================"
-echo " RLT_ori Phase-2 TD3 (release-pi05-${VARIANT}, libero_goal task ${TASK_ID})"
+echo " RLT Phase-2 TD3 (release-pi05-${VARIANT}, libero_goal task ${TASK_ID})"
 echo "   GPU:        ${GPU_ID}"
 echo "   ckpt:       ${CKPT_PATH}"
 echo "   encoder:    ${ENCODER_PATH}"
@@ -80,7 +80,7 @@ export CUDA_VISIBLE_DEVICES=${GPU_ID}
 
 python AlphaBrain/training/reinforcement_learning/trainers/train.py \
     --phase rl_offpolicy \
-    --encoder_mode rlt_ori \
+    --encoder_mode rlt \
     --ckpt_path ${CKPT_PATH} \
     --encoder_path ${ENCODER_PATH} \
     --output_dir ${OUTPUT_DIR} \

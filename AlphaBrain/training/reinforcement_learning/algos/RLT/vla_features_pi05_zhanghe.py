@@ -69,7 +69,7 @@ def get_vla_hidden_states_pi05(
     """Return Pi05's z_{1:M} (paper Eq. 1) for a batch.
 
     Drop-in shape-compatible replacement for
-    ``RLT_ori.vla_features.get_vla_hidden_states``.
+    ``RLT.vla_features.get_vla_hidden_states``.
 
     Pipeline (mirrors PaliGemmaPi05._predict_action lines 762-784):
         1. ``_prepare_prefix_paligemma`` → image+text prefix embeddings.

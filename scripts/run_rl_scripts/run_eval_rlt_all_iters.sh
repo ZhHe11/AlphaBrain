@@ -1,15 +1,15 @@
 #!/bin/bash
-# Offline rlt_ori eval across ALL ckpts in one run_dir.
+# Offline rlt eval across ALL ckpts in one run_dir.
 # Parallelizes across the GPU list, one ckpt per shard.
 #
 # Usage (defaults work for Qwen-1traj-task0; override via env vars for
 # other runs):
-#   bash scripts/run_rl_scripts/run_eval_rlt_ori_all_iters.sh
+#   bash scripts/run_rl_scripts/run_eval_rlt_all_iters.sh
 #
-#   RUN_DIR=results/rlt_ori_training/rlt_ori_rl_t0_release_pi05_5traj_0429_0924/rl_offpolicy \
+#   RUN_DIR=results/rlt_training/rlt_rl_t0_release_pi05_5traj_0429_0924/rl_offpolicy \
 #   VLA_CKPT=results/training/Pi05-goal-5traj-openpi/checkpoints/steps_30000 \
 #   GPUS="0 1 2" TASK_IDS=0 \
-#   bash scripts/run_rl_scripts/run_eval_rlt_ori_all_iters.sh
+#   bash scripts/run_rl_scripts/run_eval_rlt_all_iters.sh
 set -euo pipefail
 cd "${ALPHABRAIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
@@ -21,7 +21,7 @@ export TOKENIZERS_PARALLELISM=false
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
 # ── Defaults (override via env) ──────────────────────────────
-RUN_DIR="${RUN_DIR:-results/rlt_ori_training/rlt_ori_rl_t0_release_0423_1216/rl_offpolicy}"
+RUN_DIR="${RUN_DIR:-results/rlt_training/rlt_rl_t0_release_0423_1216/rl_offpolicy}"
 VLA_CKPT="${VLA_CKPT:-results/training/0324-zh-QwenOFT-1traj-libero_goal/final_model}"
 read -r -a GPUS <<< "${GPUS:-5 6}"
 N_EPS="${N_EPS:-50}"
@@ -29,7 +29,7 @@ TASK_IDS="${TASK_IDS:-0}"
 SUITE="${SUITE:-libero_goal}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 
-# Arch — matches run_rlt_ori_rl_task0_release.sh
+# Arch — matches run_rlt_rl_task0_release.sh
 BOTTLENECK_DIM="${BOTTLENECK_DIM:-2048}"
 ENCODER_LAYERS="${ENCODER_LAYERS:-2}"
 ENCODER_HEADS="${ENCODER_HEADS:-8}"
@@ -54,11 +54,11 @@ if [ "${#CKPTS[@]}" -eq 0 ]; then
     exit 1
 fi
 
-AGG_DIR="${RUN_DIR}/eval_all_iters_rlt_ori"
+AGG_DIR="${RUN_DIR}/eval_all_iters_rlt"
 mkdir -p "${AGG_DIR}"
 
 echo "============================================================"
-echo " rlt_ori eval ALL iters"
+echo " rlt eval ALL iters"
 echo "   run_dir:  ${RUN_DIR}"
 echo "   ckpts:    ${#CKPTS[@]}  (${CKPTS[*]})"
 echo "   GPUs:     ${GPUS[*]}"
@@ -83,13 +83,13 @@ launch_one () {
     local gpu=$2
     local ckpt="${RUN_DIR}/checkpoints/${iter_name}"
     local iter_tag="${iter_name#rl_offpolicy_}"      # iter_00025
-    local out_dir="${RUN_DIR}/eval_${iter_tag}_rlt_ori"
+    local out_dir="${RUN_DIR}/eval_${iter_tag}_rlt"
     local log="${AGG_DIR}/${iter_tag}.log"
 
     mkdir -p "${out_dir}"
     rm -f "${out_dir}/summary.json"
 
-    CUDA_VISIBLE_DEVICES=${gpu} setsid python AlphaBrain/training/reinforcement_learning/eval/eval_libero_rlt_ori.py \
+    CUDA_VISIBLE_DEVICES=${gpu} setsid python AlphaBrain/training/reinforcement_learning/eval/eval_libero_rlt.py \
         --vla_ckpt "${VLA_CKPT}" \
         --action_token_ckpt "${ckpt}" \
         --suite "${SUITE}" \
@@ -141,8 +141,8 @@ import json, os, re, glob
 run_dir = "${RUN_DIR}"
 agg_dir = "${AGG_DIR}"
 rows = []
-for d in sorted(glob.glob(os.path.join(run_dir, "eval_iter_*_rlt_ori"))):
-    m = re.search(r"eval_(iter_\d+)_rlt_ori", d)
+for d in sorted(glob.glob(os.path.join(run_dir, "eval_iter_*_rlt"))):
+    m = re.search(r"eval_(iter_\d+)_rlt", d)
     if not m: continue
     it = m.group(1)
     summary = os.path.join(d, "summary.json")

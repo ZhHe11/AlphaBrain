@@ -8,7 +8,7 @@ def parse_args():
         "--phase",
         type=str,
         required=True,
-        choices=["pretrain", "pretrain_rlt_ori", "rl", "rl_offpolicy"],
+        choices=["pretrain", "pretrain_rlt", "rl", "rl_offpolicy"],
     )
     p.add_argument("--ckpt_path", type=str, required=True, help="SFT checkpoint path")
     p.add_argument("--encoder_path", type=str, default=None,
@@ -27,11 +27,11 @@ def parse_args():
 
     # RLActionToken architecture
     p.add_argument("--encoder_mode", type=str, default="action_token",
-                   choices=["action_token", "rlt_ori"],
+                   choices=["action_token", "rlt"],
                    help="Which encoder family to use in Phase 2. "
                         "'action_token' (default): pragmatic RLActionToken "
                         "encoder that consumes the chunk_len action-query slice. "
-                        "'rlt_ori': reference RL Token encoder that consumes the "
+                        "'rlt': reference RL Token encoder that consumes the "
                         "full VLM image-token sequence and keeps z_rl at the VLA "
                         "hidden dim — pair with --bottleneck_dim 2048.")
     p.add_argument("--bottleneck_dim", type=int, default=256)
@@ -63,19 +63,19 @@ def parse_args():
     p.add_argument("--vla_extract_batch_size", type=int, default=16,
                    help="Batch size for VLA action_queries extraction (one-time, memory-bound)")
 
-    # RLT_ori Phase 1 (paper-faithful pretraining)
+    # RLT Phase 1 (paper-faithful pretraining)
     p.add_argument("--demo_config", type=str, default=None,
                    help="Path to a YAML with datasets.vla_data (LeRobot demo mixture) for "
-                        "the RLT_ori pretrain phase. Required when alpha_vla > 0; "
+                        "the RLT pretrain phase. Required when alpha_vla > 0; "
                         "otherwise the trainer falls back to random-rollout observations.")
     p.add_argument("--alpha_vla", type=float, default=0.0,
-                   help="Weight on L_vla for joint VLA fine-tune during RLT_ori pretrain "
+                   help="Weight on L_vla for joint VLA fine-tune during RLT pretrain "
                         "(reference Alg. 1: ϕ, θ_vla = argmin L_ro + α L_vla). "
                         "0 keeps the VLA frozen. Requires --demo_config.")
     p.add_argument("--decoder_layers", type=int, default=2,
-                   help="RLT_ori decoder transformer layers")
+                   help="RLT decoder transformer layers")
     p.add_argument("--max_len", type=int, default=4096,
-                   help="Max VLA token sequence length the RLT_ori decoder supports "
+                   help="Max VLA token sequence length the RLT decoder supports "
                         "(controls target-stream positional embedding size)")
     p.add_argument("--image_only", action="store_true", default=True,
                    help="Strict-reference mode: keep ONLY image-token positions "

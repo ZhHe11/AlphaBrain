@@ -165,7 +165,7 @@ def get_pi05_rl_state_and_action(
                       convention (rollout's _unnormalize binarize +
                       _postprocess flip handle the LIBERO sign conversion).
     """
-    from AlphaBrain.training.reinforcement_learning.algos.RLT_ori.vla_features import (
+    from AlphaBrain.training.reinforcement_learning.algos.RLT.vla_features import (
         compact_by_mask,
     )
     from AlphaBrain.model.modules.action_model.pi0_flow_matching_head.openpi_inference import (
@@ -343,8 +343,8 @@ def make_pi05_identity_action_norm_stats(action_dim: int = 7) -> dict:
     return {"q01": [-1.0] * action_dim, "q99": [1.0] * action_dim}
 
 
-def run_rlt_ori_inference(frozen_vla, encoder, batch_images, instructions, batch_props):
-    """Backbone-agnostic VLA forward + RL-token encoding for rlt_ori.
+def run_rlt_inference(frozen_vla, encoder, batch_images, instructions, batch_props):
+    """Backbone-agnostic VLA forward + RL-token encoding for rlt.
 
     Dispatches on ``is_pi05(frozen_vla)``:
       - Pi05: one fused PaliGemma prefix + flow-matching diffusion call
@@ -362,7 +362,7 @@ def run_rlt_ori_inference(frozen_vla, encoder, batch_images, instructions, batch
             batch_props=batch_props,
         )
 
-    from AlphaBrain.training.reinforcement_learning.algos.RLT_ori import (
+    from AlphaBrain.training.reinforcement_learning.algos.RLT import (
         get_vla_hidden_states_and_action, compact_by_mask,
     )
     last_hidden, encoder_mask, _act_mask, _action_queries, vla_actions = \
