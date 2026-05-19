@@ -226,14 +226,17 @@ def run_rl(args):
                 device=str(device),
             )
             loss.backward()
-            # Average gradients across ranks
-            for p in list(actor.parameters()) + list(critic.parameters()):
-                if p.grad is not None:
-                    torch.distributed.all_reduce(p.grad, op=torch.distributed.ReduceOp.AVG)
-            if args.lr_encoder > 0:
-                for p in enc_dec.parameters():
+            # Average gradients across ranks (no-op for single-GPU runs since
+            # the default process group is never initialized without torchrun).
+            _ddp_active = torch.distributed.is_available() and torch.distributed.is_initialized()
+            if _ddp_active:
+                for p in list(actor.parameters()) + list(critic.parameters()):
                     if p.grad is not None:
                         torch.distributed.all_reduce(p.grad, op=torch.distributed.ReduceOp.AVG)
+                if args.lr_encoder > 0:
+                    for p in enc_dec.parameters():
+                        if p.grad is not None:
+                            torch.distributed.all_reduce(p.grad, op=torch.distributed.ReduceOp.AVG)
             if args.max_grad_norm > 0:
                 all_params = list(actor.parameters()) + list(critic.parameters())
                 if args.lr_encoder > 0:
