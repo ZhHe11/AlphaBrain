@@ -40,6 +40,8 @@ MULTI_TASK=${MULTI_TASK:-0}
 PPO_EPOCHS=${PPO_EPOCHS:-10}
 G_PER_TASK=${G_PER_TASK:-16}
 NUM_ENVS_PER_TASK=${NUM_ENVS_PER_TASK:-8}
+MAX_ITER=${MAX_ITER:-300}
+EVAL_INTERVAL=${EVAL_INTERVAL:-20}
 
 DEFAULT_CKPT="results/training/QwenOFT-5traj-libero_goal/final_model"
 # Auto-discover latest RLT_a-format encoder (rlt_a / smoke_rlt_a / 5traj_alltasks_*).
@@ -95,7 +97,7 @@ python -u AlphaBrain/training/reinforcement_learning/trainers/train.py \
     --reward_coef 5.0 \
     --lr_actor 3e-4 --lr_critic 3e-4 --gamma 0.99 --max_grad_norm 1.0 \
     --ppo_epochs ${PPO_EPOCHS} --gae_lambda 0.95 \
-    --max_iter 300 --eval_interval 20 --eval_n_episodes 20 \
+    --max_iter ${MAX_ITER} --eval_interval ${EVAL_INTERVAL} --eval_n_episodes 20 \
     --save_interval 50 --save_video_interval 100 \
     --seed 42 \
     --use_wandb --wandb_project AlphaBrain_RLT \
