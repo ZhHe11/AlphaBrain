@@ -1294,3 +1294,111 @@ def action_token_td_update(
             "target_mean": target.mean().item(),
         }
         return loss, stats
+
+
+# ------------------------------------------------------------------
+# GRPO (Group Relative Policy Optimization) loss
+#
+# DeepSeek-style: no value function, no GAE. Per-episode advantage is the
+# group-normalized return where a "group" = episodes sharing the same
+# initial state (state_idx). KL penalty to a reference policy regularizes
+# drift; K3 estimator keeps the gradient signal positive.
+#
+# Reuses the same on-policy collector and step records as PPO. Only the
+# loss differs.
+# ------------------------------------------------------------------
+
+def action_token_grpo_loss(
+    encoder: 'ActionTokenEncoderDecoder',
+    actor: 'ActionTokenActor',
+    ref_actor: 'ActionTokenActor',
+    episodes: List['ActionTokenEpisode'],
+    clip_eps: float = 0.2,
+    kl_coef: float = 0.04,
+    device: str = "cuda",
+):
+    """GRPO loss on a batch of episodes grouped by initial state.
+
+    For each group of episodes from the same state_idx:
+        advantage_i = (R_i - mean(R_group)) / (std(R_group) + eps)
+    A group with only one episode contributes zero advantage signal.
+
+    Loss = -E[min(ratio * A, clip(ratio, 1±ε) * A)]  +  kl_coef * KL(π || π_ref)
+    where ratio = exp(log π_new - log π_old), and KL uses the k3 estimator:
+        kl ≈ exp(ref_lp - new_lp) - (ref_lp - new_lp) - 1   (always ≥ 0)
+
+    Returns: (loss, stats_dict).
+    """
+    from collections import defaultdict
+
+    # ── 1. Group-relative episode-level advantages ────────────────────
+    groups = defaultdict(list)
+    for ep_idx, ep in enumerate(episodes):
+        groups[ep.state_idx].append((ep_idx, ep))
+
+    ep_advantages = [0.0] * len(episodes)
+    for state_idx, group in groups.items():
+        rewards = [ep.reward for _, ep in group]
+        if len(rewards) < 2:
+            # No within-group spread — no relative signal.
+            continue
+        mu = sum(rewards) / len(rewards)
+        var = sum((r - mu) ** 2 for r in rewards) / len(rewards)
+        sigma = max(var ** 0.5, 1e-8)
+        for (ep_idx, ep) in group:
+            ep_advantages[ep_idx] = (ep.reward - mu) / sigma
+
+    # ── 2. Flatten step records, broadcast episode advantage to all its steps ──
+    all_rl_tokens, all_vla_actions, all_actions_taken = [], [], []
+    all_old_log_probs, all_advantages, all_prop_states = [], [], []
+    for ep_idx, ep in enumerate(episodes):
+        adv = ep_advantages[ep_idx]
+        for t in range(ep.finish_step):
+            step = ep.step_records[t]
+            all_rl_tokens.append(step.rl_token)
+            all_vla_actions.append(step.vla_action)
+            all_actions_taken.append(step.action_taken)
+            all_old_log_probs.append(step.old_log_prob)
+            all_advantages.append(adv)
+            prop = step.prop_state if step.prop_state is not None else torch.zeros(8)
+            all_prop_states.append(prop)
+
+    if not all_rl_tokens:
+        return torch.tensor(0.0, device=device, requires_grad=True), {"n_steps": 0}
+
+    rl_tokens = torch.stack(all_rl_tokens).to(device)
+    vla_actions = torch.stack(all_vla_actions).to(device)
+    actions_taken = torch.stack(all_actions_taken).to(device)
+    old_lp = torch.tensor(all_old_log_probs, device=device)
+    advantages = torch.tensor(all_advantages, device=device, dtype=torch.float32)
+    prop_states = torch.stack(all_prop_states).to(device)
+
+    # ── 3. New policy log prob (with grad) and clipped surrogate ──────
+    new_lp = actor.log_prob_of(rl_tokens, vla_actions, actions_taken, prop_states)
+    ratio = torch.exp(new_lp - old_lp)
+    surr1 = ratio * advantages
+    surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
+    pg_loss = -torch.min(surr1, surr2).mean()
+
+    # ── 4. KL penalty (k3 estimator, no grad on reference) ────────────
+    with torch.no_grad():
+        ref_lp = ref_actor.log_prob_of(rl_tokens, vla_actions, actions_taken, prop_states)
+    log_ratio_ref = ref_lp - new_lp
+    kl = torch.exp(log_ratio_ref) - log_ratio_ref - 1.0
+    kl_loss = kl.mean()
+
+    loss = pg_loss + kl_coef * kl_loss
+
+    stats = {
+        "loss": loss.item(),
+        "pg_loss": pg_loss.item(),
+        "kl": kl_loss.item(),
+        "ratio_mean": ratio.mean().item(),
+        "clip_frac": ((ratio - 1.0).abs() > clip_eps).float().mean().item(),
+        "advantage_mean": advantages.mean().item(),
+        "advantage_std": advantages.std().item() if advantages.numel() > 1 else 0.0,
+        "n_groups": len(groups),
+        "n_groups_with_signal": sum(1 for s, g in groups.items() if len(g) >= 2),
+        "n_steps": len(all_rl_tokens),
+    }
+    return loss, stats

@@ -8,7 +8,7 @@ def parse_args():
         "--phase",
         type=str,
         required=True,
-        choices=["pretrain", "pretrain_rlt", "rl", "rl_offpolicy"],
+        choices=["pretrain", "pretrain_rlt", "rl", "rl_offpolicy", "grpo"],
     )
     p.add_argument("--ckpt_path", type=str, required=True, help="SFT checkpoint path")
     p.add_argument("--encoder_path", type=str, default=None,
@@ -127,6 +127,13 @@ def parse_args():
     p.add_argument("--recon_loss_coef", type=float, default=0.1)
     p.add_argument("--max_grad_norm", type=float, default=1.0)
     p.add_argument("--num_steps_wait", type=int, default=10)
+
+    # GRPO-specific (phase grpo)
+    p.add_argument("--grpo_kl_coef", type=float, default=0.04,
+                   help="KL-to-ref penalty coefficient (DeepSeek default 0.04)")
+    p.add_argument("--ref_update_interval", type=int, default=0,
+                   help="Refresh reference actor every N iters (0 = never; "
+                        "keeps initial actor as fixed reference)")
 
     # Off-policy RL (Phase 2 offpolicy)
     p.add_argument("--buffer_capacity", type=int, default=100000,
