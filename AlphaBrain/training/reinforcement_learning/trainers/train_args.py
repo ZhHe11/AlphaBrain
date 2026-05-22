@@ -8,7 +8,7 @@ def parse_args():
         "--phase",
         type=str,
         required=True,
-        choices=["pretrain", "pretrain_rlt", "rl", "rl_offpolicy", "grpo", "vla_ppo"],
+        choices=["pretrain", "pretrain_rlt", "rl", "rl_offpolicy", "grpo", "vla_ppo", "vla_grpo"],
     )
     p.add_argument("--ckpt_path", type=str, required=True, help="SFT checkpoint path")
     p.add_argument("--encoder_path", type=str, default=None,

@@ -43,6 +43,7 @@ from AlphaBrain.training.reinforcement_learning.trainers.train_rl_offpolicy impo
 from AlphaBrain.training.reinforcement_learning.trainers.train_rl_onpolicy import run_rl
 from AlphaBrain.training.reinforcement_learning.trainers.train_rl_grpo import run_rl_grpo
 from AlphaBrain.training.reinforcement_learning.trainers.train_rl_vla_ppo import run_rl_vla_ppo
+from AlphaBrain.training.reinforcement_learning.trainers.train_rl_vla_grpo import run_rl_vla_grpo
 from AlphaBrain.training.reinforcement_learning.trainers.train_rlt_pretrain import run_rlt_pretrain
 
 
@@ -60,6 +61,8 @@ def main():
         run_rl_grpo(args)
     elif args.phase == "vla_ppo":
         run_rl_vla_ppo(args)
+    elif args.phase == "vla_grpo":
+        run_rl_vla_grpo(args)
     else:
         raise ValueError(f"Unknown phase: {args.phase}")
 

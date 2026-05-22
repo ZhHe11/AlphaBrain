@@ -1,25 +1,28 @@
 #!/bin/bash
-# Vanilla VLA + PPO (full finetune) — Qwen-OFT only.
+# Vanilla VLA + GRPO (full finetune) — Qwen-OFT only.
 #
-# Trains the ENTIRE VLA (Qwen2.5-VL-3B backbone + action head + value head)
-# via clipped PG. No encoder, no RLT_a stack. Memory-heavy: ~50 GB on
-# 80 GB GPU; needs gradient checkpointing (enabled in trainer).
+# Trains the ENTIRE VLA via group-relative PG with KL-to-reference penalty.
+# Memory: ~58 GB on 80 GB GPU (current VLA + Adam + ref VLA bf16).
 #
-# Each PPO update epoch re-forwards the VLA over every transition in the
-# rollout (in micro-batches). This is the cost vs RLT_a-stack PPO.
+# IMPORTANT: GRPO needs G >= group_size and group_size >= 2 for a usable
+# relative signal. Default G=8, group_size=2 → 4 distinct init states,
+# 2 rollouts each.
 #
 # Usage:
-#   bash scripts/run_rl_scripts/run_qwen_vla_ppo.sh [GPU_ID]              # task 0 default
-#   TASK_ID=1 bash scripts/run_rl_scripts/run_qwen_vla_ppo.sh 0           # task 1
+#   bash scripts/run_rl_scripts/run_qwen_vla_grpo.sh [GPU_ID]
+#   TASK_ID=1 bash scripts/run_rl_scripts/run_qwen_vla_grpo.sh 0
 #
 # Env:
 #   TASK_ID         libero_goal task index (default 0)
 #   CKPT_PATH       Qwen VLA ckpt (default 1traj if exists, else 5traj)
-#   PPO_EPOCHS      PPO epochs per iter (default 2; high cost so keep low)
+#   PPO_EPOCHS      GRPO epochs per iter (default 2)
 #   G               episodes per iter (default 8)
+#   GROUP_SIZE      rollouts per initial state (default 2; min 2 for GRPO)
 #   NUM_ENVS        parallel envs per rollout wave (default 4)
-#   MICRO_BATCH     VLA re-forward batch size in PPO update (default 2; OOM-bound)
+#   MICRO_BATCH     VLA re-forward batch size (default 2; OOM-bound)
 #   LR_VLA          VLA full-FT LR (default 1e-5)
+#   KL_COEF         KL-to-ref penalty (default 0.04, DeepSeek default)
+#   REF_UPD_INT     refresh ref VLA every N iters (default 0 = never)
 #   MAX_ITER        total iterations (default 30)
 #   EVAL_INTERVAL   eval cadence (default 5)
 set -euo pipefail
@@ -37,13 +40,15 @@ GPU_ID=${1:-0}
 TASK_ID=${TASK_ID:-0}
 PPO_EPOCHS=${PPO_EPOCHS:-2}
 G=${G:-8}
+GROUP_SIZE=${GROUP_SIZE:-2}
 NUM_ENVS=${NUM_ENVS:-4}
 MICRO_BATCH=${MICRO_BATCH:-2}
 LR_VLA=${LR_VLA:-1e-5}
+KL_COEF=${KL_COEF:-0.04}
+REF_UPD_INT=${REF_UPD_INT:-0}
 MAX_ITER=${MAX_ITER:-30}
 EVAL_INTERVAL=${EVAL_INTERVAL:-5}
 
-# Prefer 1traj ckpt (faster experiments); fall back to 5traj.
 if [ -d "results/training/0324-zh-QwenOFT-1traj-libero_goal/final_model" ]; then
     DEFAULT_CKPT="results/training/0324-zh-QwenOFT-1traj-libero_goal/final_model"
 else
@@ -54,39 +59,39 @@ CKPT_PATH="${CKPT_PATH:-${DEFAULT_CKPT}}"
 [ -d "${CKPT_PATH}" ] || { echo "ERROR: VLA ckpt not found: ${CKPT_PATH}" >&2; exit 1; }
 
 TIMESTAMP=$(date +%m%d_%H%M)
-RUN_TAG="vla_ppo_qwen_t${TASK_ID}"
-OUTPUT_DIR="results/rlt_training/${RUN_TAG}_${TIMESTAMP}/vla_ppo"
+RUN_TAG="vla_grpo_qwen_t${TASK_ID}"
+OUTPUT_DIR="results/rlt_training/${RUN_TAG}_${TIMESTAMP}/vla_grpo"
 mkdir -p "${OUTPUT_DIR}"
 TRAIN_LOG="${OUTPUT_DIR}/train.log"
 
 echo "============================================================"
-echo " Vanilla VLA + PPO (FULL FT)  — Qwen, task ${TASK_ID}"
+echo " Vanilla VLA + GRPO (FULL FT)  — Qwen, task ${TASK_ID}"
 echo "   GPU:           ${GPU_ID}"
 echo "   ckpt:          ${CKPT_PATH}"
-echo "   PPO epochs:    ${PPO_EPOCHS}     micro_batch: ${MICRO_BATCH}"
-echo "   G/iter:        ${G}              envs: ${NUM_ENVS}"
-echo "   lr_vla:        ${LR_VLA}"
-echo "   max_iter:      ${MAX_ITER}       eval_interval: ${EVAL_INTERVAL}"
+echo "   GRPO epochs:   ${PPO_EPOCHS}     micro_batch: ${MICRO_BATCH}"
+echo "   G/iter:        ${G}              group_size: ${GROUP_SIZE}"
+echo "   envs:          ${NUM_ENVS}"
+echo "   lr_vla:        ${LR_VLA}         kl_coef: ${KL_COEF}"
+echo "   ref_upd_int:   ${REF_UPD_INT}    max_iter: ${MAX_ITER}"
 echo "   output:        ${OUTPUT_DIR}"
 echo "============================================================"
-echo "WARN: full-VLA PPO is memory + compute heavy."
-echo "      Expect ~50 GB GPU mem and ~30-60 min/iter."
+echo "WARN: full-VLA GRPO is mem-heavy (~58 GB GPU; trainable + ref VLA)."
 echo "============================================================"
 
 export CUDA_VISIBLE_DEVICES=${GPU_ID}
 
 python -u AlphaBrain/training/reinforcement_learning/trainers/train.py \
-    --phase vla_ppo \
+    --phase vla_grpo \
     --ckpt_path ${CKPT_PATH} \
     --output_dir ${OUTPUT_DIR} \
     --suite libero_goal --task_id ${TASK_ID} \
-    --G ${G} --num_envs ${NUM_ENVS} --group_size 1 \
+    --G ${G} --num_envs ${NUM_ENVS} --group_size ${GROUP_SIZE} \
     --reward_coef 5.0 \
-    --lr_vla ${LR_VLA} --lr_critic 3e-4 \
-    --critic_hidden_dim 256 \
+    --lr_vla ${LR_VLA} \
     --fixed_std 0.1 \
     --ppo_epochs ${PPO_EPOCHS} --micro_batch ${MICRO_BATCH} \
-    --clip_eps 0.2 --vf_coef 0.5 \
+    --clip_eps 0.2 --grpo_kl_coef ${KL_COEF} \
+    --ref_update_interval ${REF_UPD_INT} \
     --gamma 0.99 --gae_lambda 0.95 --max_grad_norm 1.0 \
     --max_iter ${MAX_ITER} --eval_interval ${EVAL_INTERVAL} --eval_n_episodes 20 \
     --save_interval 50 --num_steps_wait 10 \

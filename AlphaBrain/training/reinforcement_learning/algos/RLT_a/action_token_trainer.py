@@ -600,6 +600,7 @@ def action_token_collect_group(
     store_images: bool = False,
     group_size: int = 1,
     reward_coef: float = 1.0,
+    encoder_mode: str = "action_token",
 ) -> List[ActionTokenEpisode]:
     """
     Collect G episodes using RLT_a policy.
@@ -614,6 +615,10 @@ def action_token_collect_group(
         group_size: number of trajectories per initial state. G episodes are
                     split into G//group_size unique states, each repeated
                     group_size times. Default 1 = legacy behavior (no repeat).
+        encoder_mode: "action_token" (RLT_a — encoder consumes the VLA
+                    action-query slice) or "rlt" (RLT — encoder consumes the
+                    compacted full-token image slice). Forwarded to the
+                    BatchInferenceServer created locally for this call.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -631,6 +636,7 @@ def action_token_collect_group(
             actor=actor,
             critic=critic,
             device=device,
+            encoder_mode=encoder_mode,
         ).start()
 
     n_workers = min(G, num_envs)

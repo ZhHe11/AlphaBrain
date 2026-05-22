@@ -140,6 +140,7 @@ def _eval_distributed(
     seed: int,
     device: str,
     video_dir=None,
+    encoder_mode: str = "action_token",
 ) -> dict:
     """Distributed eval: split episodes across all ranks, gather results.
 
@@ -158,8 +159,17 @@ def _eval_distributed(
         logger.info(f"[eval] Distributing {n_episodes} eval episodes across {world_size} GPUs "
                      f"({len(my_indices)} per rank)")
 
+    # rlt-mode encoders consume compacted full-token hidden states, not
+    # action_queries — dispatch to the matching local eval helper.
+    if encoder_mode == "rlt":
+        from AlphaBrain.training.reinforcement_learning.eval.eval_helpers_rlt import (
+            _eval_deterministic_local_rlt as _eval_local,
+        )
+    else:
+        _eval_local = _eval_deterministic_local
+
     with torch.no_grad():
-        local_results = _eval_deterministic_local(
+        local_results = _eval_local(
             frozen_vla=frozen_vla,
             encoder=encoder,
             actor=actor,

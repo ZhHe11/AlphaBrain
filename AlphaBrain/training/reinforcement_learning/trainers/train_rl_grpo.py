@@ -69,15 +69,40 @@ def run_rl_grpo(args):
     n_tasks = suite_info["n_tasks"]
     max_steps = MAX_STEPS[args.suite]
 
-    # Encoder
-    enc_dec = ActionTokenEncoderDecoder(
-        input_dim=hidden_dim,
-        bottleneck_dim=args.bottleneck_dim,
-        chunk_len=chunk_len,
-        num_heads=args.encoder_heads,
-        encoder_layers=args.encoder_layers,
-        decoder_layers=args.encoder_layers,
-    ).to(device)
+    # Encoder — action_token (RLT_a) or rlt (full-token RLT) per --encoder_mode
+    encoder_mode = getattr(args, "encoder_mode", "action_token")
+    if encoder_mode == "rlt":
+        # RLT reference track: z_rl is kept at the VLA hidden dim (no extra
+        # bottleneck projection). --bottleneck_dim is repurposed as the
+        # encoder hidden dim and must equal the VLA hidden_size.
+        from AlphaBrain.training.reinforcement_learning.algos.RLT import (
+            RLTokenEncoderDecoder,
+        )
+        if args.bottleneck_dim != hidden_dim:
+            logger.warning(
+                f"  --bottleneck_dim={args.bottleneck_dim} != VLA hidden_dim="
+                f"{hidden_dim}; RLT encoder uses the VLA hidden dim. "
+                f"Overriding bottleneck_dim."
+            )
+            args.bottleneck_dim = hidden_dim
+        enc_dec = RLTokenEncoderDecoder(
+            hidden_dim=hidden_dim,
+            num_heads=args.encoder_heads,
+            encoder_layers=args.encoder_layers,
+            decoder_layers=getattr(args, "decoder_layers", args.encoder_layers),
+            max_len=getattr(args, "max_len", 4096),
+        ).to(device)
+    else:
+        enc_dec = ActionTokenEncoderDecoder(
+            input_dim=hidden_dim,
+            bottleneck_dim=args.bottleneck_dim,
+            chunk_len=chunk_len,
+            num_heads=args.encoder_heads,
+            encoder_layers=args.encoder_layers,
+            decoder_layers=args.encoder_layers,
+        ).to(device)
+    if is_main:
+        logger.info(f"Encoder mode: {encoder_mode}  (bottleneck_dim={args.bottleneck_dim})")
     if args.encoder_path:
         logger.info(f"[rank {rank}] Loading pretrained encoder from {args.encoder_path}")
         enc_dec.load_state_dict(torch.load(args.encoder_path, map_location=device))
@@ -163,6 +188,7 @@ def run_rl_grpo(args):
             group_idx=iteration * world_size + rank,
             group_size=args.group_size,
             reward_coef=args.reward_coef,
+            encoder_mode=encoder_mode,
         )
 
         local_rewards = torch.tensor([ep.reward for ep in local_episodes],
@@ -245,6 +271,7 @@ def run_rl_grpo(args):
                 n_episodes=args.eval_n_episodes,
                 num_steps_wait=args.num_steps_wait, seed=args.seed,
                 device=str(device), video_dir=eval_video_dir,
+                encoder_mode=encoder_mode,
             )
             if is_main and eval_result:
                 eval_sr = eval_result["eval_sr"]

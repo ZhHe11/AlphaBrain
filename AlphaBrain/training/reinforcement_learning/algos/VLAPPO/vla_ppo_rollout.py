@@ -72,6 +72,7 @@ def vla_ppo_collect(
     group_idx: int = 0,
     group_size: int = 1,
     reward_coef: float = 5.0,
+    deterministic: bool = False,
 ) -> List[VLAPPOEpisode]:
     """Collect G episodes on a single task with the VLA-policy.
 
@@ -158,9 +159,12 @@ def vla_ppo_collect(
                     )
                     local_eps[i].step_records.append(rec)
 
-                # 4) Execute chunk in env (per-env loop; chunk_len env.step)
+                # 4) Execute chunk in env (per-env loop; chunk_len env.step).
+                #    Eval (deterministic=True) executes the policy mean;
+                #    training executes the Gaussian sample.
+                exec_cpu = mean_cpu if deterministic else sampled_cpu
                 for j, i in enumerate(idxs):
-                    chunk_actions_unnorm = _unnormalize(sampled_cpu[j].numpy(), action_norm_stats)
+                    chunk_actions_unnorm = _unnormalize(exec_cpu[j].numpy(), action_norm_stats)
                     last_obs, last_done, last_reward = None, False, 0.0
                     steps_executed = 0
                     for step_in_chunk in range(chunk_len):
