@@ -11,9 +11,14 @@
 # Usage:
 #   bash scripts/run_rl_scripts/run_qwen_vla_ppo.sh [GPU_ID]              # task 0 default
 #   TASK_ID=1 bash scripts/run_rl_scripts/run_qwen_vla_ppo.sh 0           # task 1
+#   MULTI_TASK=1 bash scripts/run_rl_scripts/run_qwen_vla_ppo.sh 0        # all 10 libero_goal tasks
 #
 # Env:
-#   TASK_ID         libero_goal task index (default 0)
+#   TASK_ID         libero_goal task index (default 0; ignored if MULTI_TASK=1)
+#   MULTI_TASK      1 = --all_tasks (default 0 = single task). NOTE: with
+#                   --all_tasks, --G / --num_envs are PER-TASK (trainer dest is
+#                   G_per_task / num_envs_per_task), so keep them small (e.g.
+#                   G=4 NUM_ENVS=4 → 40 eps/iter across 10 tasks).
 #   CKPT_PATH       Qwen VLA ckpt (default 1traj if exists, else 5traj)
 #   PPO_EPOCHS      PPO epochs per iter (default 2; high cost so keep low)
 #   G               episodes per iter (default 8)
@@ -35,6 +40,8 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
 GPU_ID=${1:-0}
 TASK_ID=${TASK_ID:-0}
+MULTI_TASK=${MULTI_TASK:-0}
+TASKS_PER_ITER=${TASKS_PER_ITER:-0}
 PPO_EPOCHS=${PPO_EPOCHS:-2}
 G=${G:-8}
 NUM_ENVS=${NUM_ENVS:-4}
@@ -53,14 +60,18 @@ CKPT_PATH="${CKPT_PATH:-${DEFAULT_CKPT}}"
 
 [ -d "${CKPT_PATH}" ] || { echo "ERROR: VLA ckpt not found: ${CKPT_PATH}" >&2; exit 1; }
 
+if [ "${MULTI_TASK}" = "1" ]; then
+    TASK_FLAG="--all_tasks"; RUN_TAG="vla_ppo_qwen_alltasks"
+else
+    TASK_FLAG="--task_id ${TASK_ID}"; RUN_TAG="vla_ppo_qwen_t${TASK_ID}"
+fi
 TIMESTAMP=$(date +%m%d_%H%M)
-RUN_TAG="vla_ppo_qwen_t${TASK_ID}"
 OUTPUT_DIR="results/rlt_training/${RUN_TAG}_${TIMESTAMP}/vla_ppo"
 mkdir -p "${OUTPUT_DIR}"
 TRAIN_LOG="${OUTPUT_DIR}/train.log"
 
 echo "============================================================"
-echo " Vanilla VLA + PPO (FULL FT)  — Qwen, task ${TASK_ID}"
+echo " Vanilla VLA + PPO (FULL FT)  — Qwen, ${TASK_FLAG}"
 echo "   GPU:           ${GPU_ID}"
 echo "   ckpt:          ${CKPT_PATH}"
 echo "   PPO epochs:    ${PPO_EPOCHS}     micro_batch: ${MICRO_BATCH}"
@@ -79,7 +90,7 @@ python -u AlphaBrain/training/reinforcement_learning/trainers/train.py \
     --phase vla_ppo \
     --ckpt_path ${CKPT_PATH} \
     --output_dir ${OUTPUT_DIR} \
-    --suite libero_goal --task_id ${TASK_ID} \
+    --suite libero_goal ${TASK_FLAG} --tasks_per_iter ${TASKS_PER_ITER} \
     --G ${G} --num_envs ${NUM_ENVS} --group_size 1 \
     --reward_coef 5.0 \
     --lr_vla ${LR_VLA} --lr_critic 3e-4 \
@@ -90,7 +101,7 @@ python -u AlphaBrain/training/reinforcement_learning/trainers/train.py \
     --gamma 0.99 --gae_lambda 0.95 --max_grad_norm 1.0 \
     --max_iter ${MAX_ITER} --eval_interval ${EVAL_INTERVAL} --eval_n_episodes 20 \
     --save_interval 50 --num_steps_wait 10 \
-    --train_gpu 0 --seed 42 \
+    --train_gpu 0 --seed ${SEED:-42} \
     --use_wandb --wandb_project AlphaBrain_RLT \
-    --run_name "${RUN_TAG}" --log_interval 1 \
+    --run_name "${RUN_NAME:-${RUN_TAG}}" --log_interval 1 \
     2>&1 | tee "${TRAIN_LOG}"
