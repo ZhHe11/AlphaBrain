@@ -123,11 +123,13 @@
 
 > 固定同一 RLT 编码器、相同任务集、相同 env-step 预算、≥3 seed。横轴对齐 env steps。
 
-| 算法 | 类型 | critic | 终态 SR(终值,task0/1/3) | 样本效率 (env-steps→80%SR) | 稳定性 (seed 方差) | 代码状态 |
+| 算法 | 类型 | critic | 终态 SR(终值,task0/1/3) | 样本效率 (env-steps→80% all-task SR) | 稳定性 (seed 方差) | 代码状态 |
 |:-----|:-----|:-------|:---------------------------|:---------------------------|:-------------------|:---------|
-| TD3 | off-policy AC | 双 Q + 目标平滑 | 0.98 / 0.92 / 0.64 | — | — | ✅ 可跑 |
-| GRPO | on-policy PG | 无(组相对优势) | 0.96 / 0.96 / **0.71±0.06** | — | — | ✅ 已跑通;t3 **3-seed mean±std**(42/43/44 = 0.64/0.74/0.74) |
-| PPO | on-policy AC | V(s) + GAE | 0.94 / 0.92 / **0.95±0.01** | — | — | ✅ task0/1/3 已跑通(`run_rlt_ppo.sh`,iter 300);**task3 = 0.95±0.01(3-seed:0.96/0.94/0.94)是 RLT × 任意 algo 最高 task3**,且方差极小(稳定突破难任务) |
+| TD3 | off-policy AC | 双 Q + 目标平滑 | 0.98 / 0.92 / 0.64 | **~10.2M**(iter300 累计 14.6M,终值仅 0.83) | — | ✅ 可跑 |
+| GRPO | on-policy PG | 无(组相对优势) | 0.96 / 0.96 / **0.71±0.06** | **从未达 80%**(plateau ~0.72-0.75;iter300 累计 ~3.1M) | — | ✅ 已跑通;t3 **3-seed mean±std**(42/43/44 = 0.64/0.74/0.74) |
+| PPO | on-policy AC | V(s) + GAE | 0.94 / 0.92 / **0.95±0.01** | **~0.5M**(首个 eval 点即 >0.8;~2.5M 到 plateau >0.9) | — | ✅ task0/1/3 已跑通(`run_rlt_ppo.sh`,iter 300);**task3 = 0.95±0.01(3-seed:0.96/0.94/0.94)是 RLT × 任意 algo 最高 task3**,且方差极小(稳定突破难任务) |
+
+> **样本效率(0608 新增,all-task SR vs 累计 env-step,源各 run `metrics.json` 的 `total_env_steps` + `eval_effcurve_0608/` SR)**:横轴 env-step 对齐后,**PPO ~0.5M 到 80% / TD3 ~10.2M(20× 更多)/ GRPO 永不达 80%**。off-policy replay 让 TD3 跑到 iter300 消耗 14.6M env-step(vs PPO 2.5M,~6×),换来更低的终值。配图 `fig6c_sample_efficiency.png`(已接 overleaf `fig:rlt_sample_eff`)。注:此 env-step 数来自**多任务 all-10 run**,样本效率指标为 all-task 口径(非单任务 task0/1/3)。
 
 说明:这张表是"重点"叙事的承载表——同一 RLT 底座下,off-policy / on-policy、有无 critic、有无 KL 约束的对照。SR 均为 iter 300 ckpt 的**离线 50-ep 复评**终值(seed 42 / max_steps 320,`results/eval_rlt_50ep_0529/`;不取峰值、不做均值平滑),与基座 T1 同口径可比。当前 TD3 / GRPO / PPO **三 algo × 三 task 全部齐**(总 9 cell)。**PPO task3 = 0.96 是难任务上 RLT 路线的最强结果**,显著优于 TD3(0.64) 和 GRPO(0.64) —— PPO 的 critic 信号在难任务上对 RLT 底座最有利。多种子 + 样本效率/稳定性指标待 Tier-1 实验。
 

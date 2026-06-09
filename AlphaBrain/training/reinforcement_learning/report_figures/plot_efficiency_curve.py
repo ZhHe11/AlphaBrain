@@ -75,6 +75,32 @@ def _td3_curve():
     return pts
 
 
+# per-route metrics.json -> iter:total_env_steps (for the sample-efficiency axis)
+METRICS = {
+    "RLT+PPO":    "results/rlt_training/rlt_ppo_qwen_alltasks_0529_1830/rl_ppo/metrics.json",
+    "RLT+GRPO":   "results/rlt_training/rlt_grpo_qwen_alltasks_0529_2029/rl_grpo/metrics.json",
+    "RLT_a+PPO":  "results/rlt_training/rlt_a_ppo_qwen_alltasks_0529_1829/rl_onpolicy/metrics.json",
+    "RLT_a+GRPO": "results/rlt_training/rlt_a_grpo_qwen_alltasks_0529_1551/rl_grpo/metrics.json",
+    "RLT+TD3":    "results/rlt_training/rlt_td3_multitask_0602_1433/rl_offpolicy/metrics.json",
+}
+
+
+def _env_steps(route):
+    """iter -> total_env_steps from the run's metrics.json."""
+    p = os.path.join(ROOT, METRICS.get(route, ""))
+    if not os.path.exists(p):
+        return {}
+    rows = json.load(open(p))
+    rows = rows if isinstance(rows, list) else rows.get("history", [])
+    m = {}
+    for r in rows:
+        if isinstance(r, dict) and "iter" in r:
+            es = r.get("total_env_steps") or r.get("env_steps")
+            if es is not None:
+                m[int(r["iter"])] = int(es)
+    return m
+
+
 def _seed_std(headline, seed_paths):
     vals = [headline]
     for p in seed_paths:
@@ -193,9 +219,56 @@ def fig_vs_vla():
     fig.savefig(out, dpi=150); plt.close(fig); print("wrote", out)
 
 
+def fig_sample_efficiency():
+    """SR vs cumulative environment steps -- the proper sample-efficiency axis
+    that makes off-policy (TD3) and on-policy (PPO/GRPO) comparable."""
+    R = routes()
+    fig, ax = plt.subplots(figsize=(8.6, 5.2))
+    print("== fig6c (sample efficiency: SR vs env-steps) ==")
+    ax.axhline(0.80, color="#9CA3AF", ls=":", lw=1.0, alpha=0.8)
+    ax.text(0.2, 0.815, "80% SR", fontsize=8, color="#6B7280")
+    for name, r in R.items():
+        if r.get("endpoint_only"):
+            continue
+        es = _env_steps(name)
+        if not es:
+            continue
+        color = ALGO_C[r["algo"]]
+        solid = r["enc"] == "RLT"
+        ls, mk = ("-", "o") if solid else ("--", "^")
+        # pair each evaluated iter with its cumulative env-steps (anchor at 0,0)
+        xy = [(0.0, 0.0)]
+        for it in sorted(r["pts"]):
+            if it == 0:
+                continue
+            if it in es:
+                xy.append((es[it] / 1e6, r["pts"][it]))
+        if len(xy) < 2:
+            continue
+        xs, ys = zip(*xy)
+        ax.plot(xs, ys, ls + mk, color=color, lw=2.0, markersize=5.5, alpha=0.95, label=name)
+        # env-steps to first reach 80%
+        hit = next((x for x, y in xy if y >= 0.80), None)
+        tag = f"   ->80% at {hit:.1f}M" if hit else "   never reaches 80%"
+        print(f"  {name}: " + " ".join(f"{x:.1f}M:{y:.3f}" for x, y in xy) + tag)
+    ax.set_xlabel("Cumulative environment steps (millions)")
+    ax.set_ylabel("Offline 50-ep all-task success rate")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlim(-0.3, 15.2)
+    ax.grid(ls=":", alpha=0.5)
+    ax.set_title("Sample efficiency: success rate vs cumulative environment steps\n"
+                 "PPO crosses 80% at ${\\sim}0.5$M steps; TD3 needs ${\\sim}20\\times$ more "
+                 "(${\\sim}10$M); GRPO stays below 80%", fontsize=10.5)
+    ax.legend(loc="lower right", fontsize=9, ncol=2)
+    fig.tight_layout()
+    out = os.path.join(HERE, "fig6c_sample_efficiency.png")
+    fig.savefig(out, dpi=150); plt.close(fig); print("wrote", out)
+
+
 def main():
     fig_grid()
     fig_vs_vla()
+    fig_sample_efficiency()
 
 
 if __name__ == "__main__":
