@@ -15,6 +15,7 @@ import os
 import socket
 import struct
 import subprocess
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -25,6 +26,19 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 _FAST_WORKER_SCRIPT = str(Path(__file__).parent / "libero_env_worker_fast.py")
+
+# Robustness knobs (env-var overridable, see persistent-env-pool-timeout memory)
+_RESET_MAX_RETRIES = int(os.environ.get("LIBERO_WORKER_RESET_RETRIES", "3"))
+_STEP_MAX_RETRIES = int(os.environ.get("LIBERO_WORKER_STEP_RETRIES", "2"))
+_RETRY_BACKOFF_BASE = float(os.environ.get("LIBERO_WORKER_RETRY_BACKOFF", "5.0"))
+# Worker IPC timeout. Hardcoded 120s falsely killed slow-but-alive MuJoCo
+# workers under CPU oversubscription (load >> nproc), triggering a restart
+# storm that thrashed the whole run. Raised to 300s and made env-overridable.
+_WORKER_TIMEOUT = float(os.environ.get("LIBERO_WORKER_TIMEOUT", "300"))
+# Cap BLAS/OpenMP threads per worker. Each worker is a CPU-bound MuJoCo proc;
+# unbounded BLAS threads (4-8x per worker x ~90 workers) are the hidden load
+# multiplier behind the thrash. Pin to 1 thread/worker unless overridden.
+_WORKER_THREAD_LIMIT = os.environ.get("LIBERO_WORKER_THREADS", "1")
 
 
 # ── Socket-based IPC (replaces pipe-based _write_msg/_read_msg) ──
@@ -46,7 +60,7 @@ def _write_msg_sock(sock: socket.socket, obj: dict):
     sock.sendall(header + data)
 
 
-def _read_msg_sock(sock: socket.socket, timeout: float = 60) -> dict:
+def _read_msg_sock(sock: socket.socket, timeout: float = 300) -> dict:
     sock.settimeout(timeout)
     try:
         raw_len = _recv_exact(sock, 4)
@@ -86,6 +100,11 @@ class _FastLiberoEnv:
         # Route MuJoCo EGL rendering to specific GPU
         if egl_gpu_id is not None:
             self._worker_env["MUJOCO_EGL_DEVICE_ID"] = str(egl_gpu_id)
+        # Pin BLAS/OpenMP threads per worker to avoid the load-multiplier thrash
+        # (see _WORKER_THREAD_LIMIT). Covers numpy/MKL/OpenBLAS/torch backends.
+        for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+            self._worker_env[_v] = _WORKER_THREAD_LIMIT
 
         self._sock: Optional[socket.socket] = None
         self._proc: Optional[subprocess.Popen] = None
@@ -108,7 +127,7 @@ class _FastLiberoEnv:
         os.set_inheritable(child_fd, True)
 
         self._sock = parent_sock
-        self._sock.settimeout(120)  # default timeout
+        self._sock.settimeout(_WORKER_TIMEOUT)  # env-overridable (default 300s)
 
         self._proc = subprocess.Popen(
             [self._python_bin, _FAST_WORKER_SCRIPT, str(child_fd)],
@@ -154,7 +173,7 @@ class _FastLiberoEnv:
             "initial_state_idx": args["initial_state_idx"],
             "seed": args["seed"],
         })
-        resp = _read_msg_sock(self._sock, timeout=120)
+        resp = _read_msg_sock(self._sock, timeout=_WORKER_TIMEOUT)
         if resp.get("status") != "ok":
             raise RuntimeError(f"Auto-reset failed: {resp.get('message', 'unknown')}")
         self.task_description = resp["task_description"]
@@ -162,59 +181,92 @@ class _FastLiberoEnv:
         self._needs_reset = False
 
     def reset(self, suite_name: str, task_id: int, initial_state_idx: int = 0, seed: int = 42) -> dict:
-        _write_msg_sock(self._sock, {
-            "cmd": "reset",
-            "task_suite": suite_name,
-            "task_id": task_id,
-            "initial_state_idx": initial_state_idx,
-            "seed": seed,
-        })
-        try:
-            resp = _read_msg_sock(self._sock, timeout=120)
-        except (TimeoutError, RuntimeError, ConnectionError, socket.timeout):
-            self._restart_worker()
-            _write_msg_sock(self._sock, {
-                "cmd": "reset", "task_suite": suite_name,
-                "task_id": task_id, "initial_state_idx": initial_state_idx, "seed": seed,
-            })
-            resp = _read_msg_sock(self._sock, timeout=120)
-        if resp.get("status") != "ok":
-            raise RuntimeError(f"Worker error: {resp.get('message', 'unknown')}")
-        self.task_description = resp["task_description"]
-        self.max_steps = resp["max_steps"]
-        self._last_reset_args = {
-            "task_suite": suite_name,
-            "task_id": task_id,
-            "initial_state_idx": initial_state_idx,
-            "seed": seed,
+        # Retry with exp backoff to survive transient CPU oversubscription
+        # (load >> nproc → MuJoCo workers can't respond inside 120s). After
+        # _RESET_MAX_RETRIES exhausted, raise — caller decides whether to
+        # propagate or mark the env dead.
+        msg = {
+            "cmd": "reset", "task_suite": suite_name,
+            "task_id": task_id, "initial_state_idx": initial_state_idx, "seed": seed,
         }
-        self._needs_reset = False
-        return _parse_obs(resp["obs"])
+        last_exc: Optional[BaseException] = None
+        for attempt in range(_RESET_MAX_RETRIES + 1):
+            try:
+                _write_msg_sock(self._sock, msg)
+                resp = _read_msg_sock(self._sock, timeout=_WORKER_TIMEOUT)
+                if resp.get("status") != "ok":
+                    raise RuntimeError(f"Worker error: {resp.get('message', 'unknown')}")
+                self.task_description = resp["task_description"]
+                self.max_steps = resp["max_steps"]
+                self._last_reset_args = {
+                    "task_suite": suite_name, "task_id": task_id,
+                    "initial_state_idx": initial_state_idx, "seed": seed,
+                }
+                self._needs_reset = False
+                return _parse_obs(resp["obs"])
+            except (TimeoutError, RuntimeError, ConnectionError,
+                    socket.timeout, BrokenPipeError) as e:
+                last_exc = e
+                if attempt < _RESET_MAX_RETRIES:
+                    backoff = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                    print(f"  [reset retry {attempt+1}/{_RESET_MAX_RETRIES}] "
+                          f"task={task_id} state={initial_state_idx}: {e}; "
+                          f"restart worker + sleep {backoff:.1f}s",
+                          flush=True)
+                    self._restart_worker()
+                    time.sleep(backoff)
+        raise RuntimeError(
+            f"reset() failed after {_RESET_MAX_RETRIES + 1} attempts "
+            f"(task={task_id} state={initial_state_idx}): {last_exc}"
+        )
 
     def step(self, action_7d: np.ndarray) -> Tuple[dict, float, bool]:
-        try:
-            self._ensure_reset_after_restart()
-            _write_msg_sock(self._sock, {"cmd": "step", "action": action_7d.tolist()})
-            resp = _read_msg_sock(self._sock, timeout=60)
-        except (TimeoutError, RuntimeError, ConnectionError, socket.timeout, BrokenPipeError):
-            self._restart_worker()
-            raise RuntimeError("Worker timed out during step, restarted")
-        if resp.get("status") != "ok":
-            raise RuntimeError(f"Worker error: {resp.get('message', 'unknown')}")
-        return _parse_obs(resp["obs"]), resp["reward"], resp["done"]
+        # Step retries are looser than reset: if a worker dies mid-rollout, the
+        # MuJoCo physics state is lost, so we can only restart + auto-reset and
+        # retry from there. Caller (rollout) can also catch and skip this env.
+        last_exc: Optional[BaseException] = None
+        for attempt in range(_STEP_MAX_RETRIES + 1):
+            try:
+                self._ensure_reset_after_restart()
+                _write_msg_sock(self._sock, {"cmd": "step", "action": action_7d.tolist()})
+                resp = _read_msg_sock(self._sock, timeout=_WORKER_TIMEOUT)
+                if resp.get("status") != "ok":
+                    raise RuntimeError(f"Worker error: {resp.get('message', 'unknown')}")
+                return _parse_obs(resp["obs"]), resp["reward"], resp["done"]
+            except (TimeoutError, RuntimeError, ConnectionError,
+                    socket.timeout, BrokenPipeError) as e:
+                last_exc = e
+                if attempt < _STEP_MAX_RETRIES:
+                    backoff = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                    print(f"  [step retry {attempt+1}/{_STEP_MAX_RETRIES}]: {e}; "
+                          f"restart worker + sleep {backoff:.1f}s", flush=True)
+                    self._restart_worker()
+                    time.sleep(backoff)
+        raise RuntimeError(f"step() failed after {_STEP_MAX_RETRIES + 1} attempts: {last_exc}")
 
     def step_chunk(self, actions: list) -> Tuple[dict, float, bool, int]:
         """Execute multiple actions in one round-trip. Returns (obs, reward, done, steps_taken)."""
-        try:
-            self._ensure_reset_after_restart()
-            _write_msg_sock(self._sock, {"cmd": "step_chunk", "actions": [a.tolist() for a in actions]})
-            resp = _read_msg_sock(self._sock, timeout=60)
-        except (TimeoutError, RuntimeError, ConnectionError, socket.timeout, BrokenPipeError):
-            self._restart_worker()
-            raise RuntimeError("Worker timed out during step_chunk, restarted")
-        if resp.get("status") != "ok":
-            raise RuntimeError(f"Worker error: {resp.get('message', 'unknown')}")
-        return _parse_obs(resp["obs"]), resp["reward"], resp["done"], resp["steps_taken"]
+        last_exc: Optional[BaseException] = None
+        for attempt in range(_STEP_MAX_RETRIES + 1):
+            try:
+                self._ensure_reset_after_restart()
+                _write_msg_sock(self._sock, {"cmd": "step_chunk",
+                                              "actions": [a.tolist() for a in actions]})
+                resp = _read_msg_sock(self._sock, timeout=_WORKER_TIMEOUT)
+                if resp.get("status") != "ok":
+                    raise RuntimeError(f"Worker error: {resp.get('message', 'unknown')}")
+                return (_parse_obs(resp["obs"]), resp["reward"],
+                        resp["done"], resp["steps_taken"])
+            except (TimeoutError, RuntimeError, ConnectionError,
+                    socket.timeout, BrokenPipeError) as e:
+                last_exc = e
+                if attempt < _STEP_MAX_RETRIES:
+                    backoff = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                    print(f"  [step_chunk retry {attempt+1}/{_STEP_MAX_RETRIES}]: {e}; "
+                          f"restart worker + sleep {backoff:.1f}s", flush=True)
+                    self._restart_worker()
+                    time.sleep(backoff)
+        raise RuntimeError(f"step_chunk() failed after {_STEP_MAX_RETRIES + 1} attempts: {last_exc}")
 
     def close(self):
         if not self._closed:
