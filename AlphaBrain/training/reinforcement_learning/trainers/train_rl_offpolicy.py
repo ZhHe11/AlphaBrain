@@ -765,6 +765,21 @@ def run_rl_offpolicy(args):
         encoder=enc_dec, actor=actor, critic=q_critic,
         optimizers={"actor": optimizer_actor, "critic": optimizer_critic},
         map_location="cpu")
+    # The replay buffer is intentionally NOT checkpointed (it is the 60-100GB RAM
+    # monster that triggers OOM-kills). On resume it starts empty; the TD-update
+    # guard `replay_buffer.is_ready(min_size=buffer_warmup)` below safely skips
+    # updates until the resumed actor refills it (a few iters). But the
+    # warmup->actor flag flip normally fires at iter==warmup_iters+1, which is
+    # skipped when we resume PAST warmup — so set the flags here, else rollout
+    # would keep collecting VLA (warmup) actions instead of the resumed actor's.
+    if start_iter > args.warmup_iters:
+        _steplock_warmup[0] = False
+        if not args.use_steplock:
+            for _gid, _srv in rollout_servers.items():
+                _srv.warmup_mode = False
+        logger.info(f"[resume] start_iter {start_iter} is past warmup_iters "
+                    f"{args.warmup_iters}: rollout set to ACTOR mode; replay buffer "
+                    f"will re-warm before TD updates resume")
 
     for iteration in range(start_iter, args.max_iter + 1):
         # ── Drain all available rollout data (non-blocking after first) ────
