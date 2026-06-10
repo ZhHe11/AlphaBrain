@@ -37,6 +37,7 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 GPU_ID=${1:-0}
 TASK_ID=${TASK_ID:-0}
 MULTI_TASK=${MULTI_TASK:-0}
+SEED=${SEED:-42}
 PPO_EPOCHS=${PPO_EPOCHS:-10}
 G_PER_TASK=${G_PER_TASK:-16}
 NUM_ENVS_PER_TASK=${NUM_ENVS_PER_TASK:-8}
@@ -68,6 +69,7 @@ else
     TASK_FLAG="--task_id ${TASK_ID}"
     RUN_TAG="rlt_a_ppo_qwen_t${TASK_ID}"
 fi
+RUN_TAG="${RUN_NAME:-${RUN_TAG}}"
 TIMESTAMP=$(date +%m%d_%H%M)
 OUTPUT_DIR="results/rlt_training/${RUN_TAG}_${TIMESTAMP}/rl_onpolicy"
 mkdir -p "${OUTPUT_DIR}"
@@ -99,7 +101,7 @@ python -u AlphaBrain/training/reinforcement_learning/trainers/train.py \
     --ppo_epochs ${PPO_EPOCHS} --gae_lambda 0.95 \
     --max_iter ${MAX_ITER} --eval_interval ${EVAL_INTERVAL} --eval_n_episodes 20 \
     --save_interval 50 --save_video_interval 100 \
-    --seed 42 \
+    --seed ${SEED} \
     --use_wandb --wandb_project AlphaBrain_RLT \
-    --run_name "${RUN_TAG}" --log_interval 1 \
+    --run_name "${RUN_TAG}" ${RESUME:+--resume} --log_interval 1 \
     2>&1 | tee "${TRAIN_LOG}"

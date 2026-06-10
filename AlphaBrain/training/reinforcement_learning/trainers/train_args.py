@@ -24,6 +24,13 @@ def parse_args():
     p.add_argument("--all_tasks", action="store_true",
                    help="Train on ALL tasks in the suite (overrides --task_id). "
                         "Each iteration collects episodes from every task.")
+    p.add_argument("--tasks_per_iter", type=int, default=0,
+                   help="Multi-task task cycling (VLA full-FT trainers only): "
+                        "if >0, each iteration trains on a rotating window of this "
+                        "many tasks from the multi-task task_list (e.g. 4 → cycle "
+                        "0-3, 4-7, 8-9,0-1, ...) instead of all tasks at once "
+                        "(merged-batch would OOM for full-VLA). Eval still covers "
+                        "the full task_list. 0 = use every task each iter.")
 
     # RLT_a architecture
     p.add_argument("--encoder_mode", type=str, default="action_token",
@@ -134,6 +141,10 @@ def parse_args():
     p.add_argument("--ref_update_interval", type=int, default=0,
                    help="Refresh reference actor every N iters (0 = never; "
                         "keeps initial actor as fixed reference)")
+    p.add_argument("--bc_warmup_steps", type=int, default=500,
+                   help="BC-pretrain the on-policy actor to ≈VLA before the "
+                        "GRPO loop (cold-start fix; 0 = off). Uses the first "
+                        "rollout batch; gated on --beta > 0.")
 
     # Vanilla VLA+PPO (phase vla_ppo)
     # Note: --lr_vla is shared with the off-policy finetune path (defined below).
@@ -202,6 +213,10 @@ def parse_args():
     p.add_argument("--use_wandb", action="store_true")
     p.add_argument("--wandb_project", type=str, default="AlphaBrain_RLT")
     p.add_argument("--run_name", type=str, default=None)
+    p.add_argument("--resume", action="store_true",
+                   help="Resume from the latest checkpoint of a prior run with the "
+                        "same --run_name (loads weights + optimizer state, continues "
+                        "from the next iteration). Safe no-op if none found.")
     args = p.parse_args()
     # Backward-compat aliases: code may still reference args.G / args.num_envs
     args.G = args.G_per_task

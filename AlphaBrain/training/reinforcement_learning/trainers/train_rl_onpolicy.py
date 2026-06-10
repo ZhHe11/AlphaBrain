@@ -23,7 +23,7 @@ from accelerate import Accelerator
 from accelerate.utils import set_seed
 
 from AlphaBrain.model.framework.base_framework import BaseFramework
-from AlphaBrain.training.reinforcement_learning.common.ckpt_io import save_rlt_checkpoint
+from AlphaBrain.training.reinforcement_learning.common.ckpt_io import save_rlt_checkpoint, maybe_resume
 from AlphaBrain.training.reinforcement_learning.eval.eval_helpers import _eval_distributed
 from AlphaBrain.training.reinforcement_learning.envs.libero_env import MAX_STEPS, get_suite_info
 from AlphaBrain.training.reinforcement_learning.algos.RLT_a.action_token_actor_critic import ActionTokenActor, ActionTokenCritic
@@ -68,15 +68,56 @@ def run_rl(args):
     n_tasks = suite_info["n_tasks"]
     max_steps = MAX_STEPS[args.suite]
 
-    # Create RLT_a modules (tiny, same on all ranks)
-    enc_dec = ActionTokenEncoderDecoder(
-        input_dim=hidden_dim,
-        bottleneck_dim=args.bottleneck_dim,
-        chunk_len=chunk_len,
-        num_heads=args.encoder_heads,
-        encoder_layers=args.encoder_layers,
-        decoder_layers=args.encoder_layers,
-    ).to(device)
+    # ── Multi-task: --all_tasks / --task_ids ─────────────────────────────
+    # On-policy trainers historically ignored --all_tasks and silently trained
+    # only args.task_id. When set, collect args.G episodes from EVERY task each
+    # iteration (mirrors the off-policy trainer) so one shared policy learns all
+    # tasks; eval then covers all tasks. task_list=None ⇒ original single-task.
+    if getattr(args, "task_ids", None):
+        _sel_tasks = [int(x) for x in args.task_ids.split(",")]
+        args.all_tasks = True
+    else:
+        _sel_tasks = None
+    task_list = ((_sel_tasks if _sel_tasks else list(range(n_tasks)))
+                 if getattr(args, "all_tasks", False) else None)
+    if task_list is not None:
+        logger.info(f"[multi-task] training across tasks {task_list} "
+                    f"({args.G} ep/task/iter, eval covers all)")
+
+    # Encoder — action_token (RLT_a) or rlt (full-token RLT) per --encoder_mode
+    encoder_mode = getattr(args, "encoder_mode", "action_token")
+    if encoder_mode == "rlt":
+        # RLT reference track: z_rl kept at the VLA hidden dim (no extra
+        # bottleneck projection). --bottleneck_dim is repurposed as the
+        # encoder hidden dim and must equal the VLA hidden_size.
+        from AlphaBrain.training.reinforcement_learning.algos.RLT import (
+            RLTokenEncoderDecoder,
+        )
+        if args.bottleneck_dim != hidden_dim:
+            logger.warning(
+                f"  --bottleneck_dim={args.bottleneck_dim} != VLA hidden_dim="
+                f"{hidden_dim}; RLT encoder uses the VLA hidden dim. "
+                f"Overriding bottleneck_dim."
+            )
+            args.bottleneck_dim = hidden_dim
+        enc_dec = RLTokenEncoderDecoder(
+            hidden_dim=hidden_dim,
+            num_heads=args.encoder_heads,
+            encoder_layers=args.encoder_layers,
+            decoder_layers=getattr(args, "decoder_layers", args.encoder_layers),
+            max_len=getattr(args, "max_len", 4096),
+        ).to(device)
+    else:
+        enc_dec = ActionTokenEncoderDecoder(
+            input_dim=hidden_dim,
+            bottleneck_dim=args.bottleneck_dim,
+            chunk_len=chunk_len,
+            num_heads=args.encoder_heads,
+            encoder_layers=args.encoder_layers,
+            decoder_layers=args.encoder_layers,
+        ).to(device)
+    if is_main:
+        logger.info(f"Encoder mode: {encoder_mode}  (bottleneck_dim={args.bottleneck_dim})")
 
     if args.encoder_path:
         logger.info(f"[rank {rank}] Loading pretrained encoder from {args.encoder_path}")
@@ -89,6 +130,7 @@ def run_rl(args):
         chunk_len=chunk_len,
         hidden_dim=args.actor_hidden_dim,
         ref_dropout=args.ref_dropout,
+        residual=True,  # μ = ã + Δ — fresh actor = VLA pass-through, no on-policy cold-start
     ).to(device)
 
     critic = ActionTokenCritic(
@@ -135,8 +177,35 @@ def run_rl(args):
     running_sr = []
     total_env_steps = 0  # cumulative environment steps (sample steps)
 
+    # Multi-task fast path: persistent merged-batch step-lock env pool (mirrors
+    # the off-policy release rollout). All tasks' envs created ONCE and stepped
+    # in lockstep with a single batched VLA forward — far faster than a naive
+    # per-task collect loop that rebuilds envs every iter.
+    _mt_pool = None
+    if task_list is not None:
+        from AlphaBrain.training.reinforcement_learning.envs.persistent_env_pool import PersistentEnvPool
+        from AlphaBrain.training.reinforcement_learning.algos.RLT_a.action_token_rollout_fast import (
+            action_token_collect_multitask_steplock,
+        )
+        _cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        _phys = [int(x) for x in _cvd.split(",") if x.strip()]
+        _egl_gpu = _phys[0] if _phys else 0
+        _mt_pool = PersistentEnvPool(
+            num_envs=args.num_envs * len(task_list),
+            libero_python=os.environ.get("LIBERO_PYTHON"),
+            egl_gpu_id=_egl_gpu,
+        )
+        logger.info(f"[multi-task] step-lock pool: {args.num_envs * len(task_list)} envs "
+                    f"({len(task_list)} tasks × {args.num_envs} envs/task)")
+
+    # ── Resume from latest checkpoint of a prior same-named run (if --resume) ──
+    start_iter = maybe_resume(
+        args, args.run_name, args.output_dir,
+        encoder=enc_dec, actor=actor, critic=critic,
+        optimizers={"opt": optimizer}, map_location="cpu")
+
     # ── Training loop ──────────────────────────────────────
-    for iteration in range(1, args.max_iter + 1):
+    for iteration in range(start_iter, args.max_iter + 1):
         if is_main:
             logger.info(f"{'='*60}")
             logger.info(f"[iter {iteration}/{args.max_iter}] Collecting "
@@ -147,32 +216,54 @@ def run_rl(args):
         iter_video_dir = (str(video_dir / f"iter_{iteration:05d}")
                           if save_video and is_main else None)
 
-        task_id = args.task_id if args.task_id >= 0 else random.randint(0, n_tasks - 1)
-
-        # ── Each rank collects G episodes in parallel ────────
+        # ── Each rank collects G episodes per task in parallel ────────
+        # Multi-task: loop every task and combine (PPO loss is per-episode GAE,
+        # so a mixed-task batch needs no grouping changes). Single-task: one task.
         group_seed = args.seed + iteration * 1000 + rank * 100
-        local_episodes = action_token_collect_group(
-            frozen_vla=frozen_vla,
-            encoder=enc_dec,
-            actor=actor,
-            critic=critic,
-            suite_name=args.suite,
-            task_id=task_id,
-            n_initial_states=50,
-            action_norm_stats=action_norm_stats,
-            max_steps=max_steps,
-            chunk_len=chunk_len,
-            G=args.G,
-            libero_python=os.environ.get("LIBERO_PYTHON"),
-            seed=group_seed,
-            num_steps_wait=args.num_steps_wait,
-            device=str(device),
-            video_dir=iter_video_dir,
-            num_envs=args.num_envs,
-            group_idx=iteration * world_size + rank,
-            group_size=args.group_size,
-            reward_coef=args.reward_coef,
-        )
+        if task_list is not None:
+            # Merged-batch step-lock over ALL tasks at once (fast path). Auto-chunk
+            # into ceil(G/num_envs) passes if G_per_task exceeds per-task env count.
+            _n_passes = max(1, (args.G + args.num_envs - 1) // args.num_envs)
+            _G_pass = min(args.G, args.num_envs)
+            local_episodes = []
+            for _p in range(_n_passes):
+                local_episodes += action_token_collect_multitask_steplock(
+                    env_pool=_mt_pool, frozen_vla=frozen_vla, encoder=enc_dec,
+                    actor=actor, critic=critic, suite_name=args.suite,
+                    task_ids=task_list, n_initial_states=50,
+                    action_norm_stats=action_norm_stats, max_steps=max_steps,
+                    chunk_len=chunk_len, G_per_task=_G_pass,
+                    seed=group_seed + _p * 50000, num_steps_wait=args.num_steps_wait,
+                    device=str(device), group_idx=(iteration * 100 + _p),
+                    group_size=args.group_size, reward_coef=args.reward_coef,
+                    encoder_mode=encoder_mode,
+                )
+            task_id = task_list[0]  # for logging
+        else:
+            task_id = args.task_id if args.task_id >= 0 else random.randint(0, n_tasks - 1)
+            local_episodes = action_token_collect_group(
+                frozen_vla=frozen_vla,
+                encoder=enc_dec,
+                actor=actor,
+                critic=critic,
+                suite_name=args.suite,
+                task_id=task_id,
+                n_initial_states=50,
+                action_norm_stats=action_norm_stats,
+                max_steps=max_steps,
+                chunk_len=chunk_len,
+                G=args.G,
+                libero_python=os.environ.get("LIBERO_PYTHON"),
+                seed=group_seed,
+                num_steps_wait=args.num_steps_wait,
+                device=str(device),
+                video_dir=iter_video_dir,
+                num_envs=args.num_envs,
+                group_idx=iteration * world_size + rank,
+                group_size=args.group_size,
+                reward_coef=args.reward_coef,
+                encoder_mode=encoder_mode,
+            )
 
         # Gather rewards from all ranks for global stats
         local_rewards = torch.tensor(
@@ -255,28 +346,38 @@ def run_rl(args):
                 logger.info(f"[iter {iteration}] Running distributed eval "
                              f"({args.eval_n_episodes} episodes across {world_size} GPUs)...")
             eval_video_dir = str(video_dir / f"eval_iter_{iteration:05d}") if save_video else None
-            eval_result = _eval_distributed(
-                accelerator=accelerator,
-                frozen_vla=frozen_vla,
-                encoder=enc_dec,
-                actor=actor,
-                suite_name=args.suite,
-                task_id=task_id,
-                action_norm_stats=action_norm_stats,
-                max_steps=max_steps,
-                chunk_len=chunk_len,
-                n_episodes=args.eval_n_episodes,
-                num_steps_wait=args.num_steps_wait,
-                seed=args.seed,
-                device=str(device),
-                video_dir=eval_video_dir,
-            )
-            if is_main and eval_result:
-                eval_sr = eval_result["eval_sr"]
+            _eval_tasks = task_list if task_list is not None else [task_id]
+            _eval_srs = {}
+            for _t in _eval_tasks:
+                _r = _eval_distributed(
+                    accelerator=accelerator,
+                    frozen_vla=frozen_vla,
+                    encoder=enc_dec,
+                    actor=actor,
+                    suite_name=args.suite,
+                    task_id=_t,
+                    action_norm_stats=action_norm_stats,
+                    max_steps=max_steps,
+                    chunk_len=chunk_len,
+                    n_episodes=args.eval_n_episodes,
+                    num_steps_wait=args.num_steps_wait,
+                    seed=args.seed,
+                    device=str(device),
+                    video_dir=(eval_video_dir if _t == _eval_tasks[0] else None),
+                    encoder_mode=encoder_mode,
+                )
+                if is_main and _r:
+                    _eval_srs[_t] = _r["eval_sr"]
+                    eval_result = _r  # keep last task's result for per-state wandb logging
+            if is_main and _eval_srs:
+                eval_sr = float(np.mean(list(_eval_srs.values())))  # all-task mean
                 best_eval_sr = max(best_eval_sr, eval_sr)
-                logger.info(f"  [eval] SR={eval_sr:.2%} (best_eval={best_eval_sr:.2%})")
-                for sid, sr in eval_result["per_state"].items():
-                    logger.info(f"    state {sid}: {sr:.2%}")
+                if len(_eval_srs) > 1:
+                    logger.info(f"  [eval] all-task mean SR={eval_sr:.2%} "
+                                 f"(best_eval={best_eval_sr:.2%}) | " +
+                                 " ".join(f"t{t}:{s:.2f}" for t, s in sorted(_eval_srs.items())))
+                else:
+                    logger.info(f"  [eval] SR={eval_sr:.2%} (best_eval={best_eval_sr:.2%})")
 
         # ── Logging (main rank only) ──────────────────────────
         if iteration % args.log_interval == 0 and is_main:
@@ -326,8 +427,9 @@ def run_rl(args):
                 if eval_sr is not None:
                     wandb_log["eval/success_rate"] = eval_sr
                     wandb_log["eval/best_success_rate"] = best_eval_sr
-                    for sid, sr in eval_result["per_state"].items():
-                        wandb_log[f"eval/state_{sid:02d}"] = sr
+                    if eval_result and eval_result.get("per_state"):
+                        for sid, sr in eval_result["per_state"].items():
+                            wandb_log[f"eval/state_{sid:02d}"] = sr
                 for ep in sorted(local_episodes, key=lambda e: -e.success):
                     if ep.video_path and os.path.exists(ep.video_path):
                         status = "success" if ep.success else "fail"
@@ -339,7 +441,8 @@ def run_rl(args):
         # ── Checkpoint (main rank only) ──────────────────────
         if iteration % args.save_interval == 0 and is_main:
             save_rlt_checkpoint(enc_dec, actor, critic,
-                                iteration, args.output_dir, phase="rl")
+                                iteration, args.output_dir, phase="rl",
+                                optimizers={"opt": optimizer})
 
         # Sync all ranks before next iteration
         accelerator.wait_for_everyone()
@@ -347,7 +450,8 @@ def run_rl(args):
     # Final save
     if is_main:
         save_rlt_checkpoint(enc_dec, actor, critic,
-                            args.max_iter, args.output_dir, phase="rl")
+                            args.max_iter, args.output_dir, phase="rl",
+                            optimizers={"opt": optimizer})
         metrics_path = Path(args.output_dir) / "metrics.json"
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         with open(metrics_path, "w") as f:

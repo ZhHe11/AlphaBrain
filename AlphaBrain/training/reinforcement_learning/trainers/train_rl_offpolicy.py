@@ -23,7 +23,7 @@ import wandb
 from accelerate.utils import set_seed
 
 from AlphaBrain.model.framework.base_framework import BaseFramework
-from AlphaBrain.training.reinforcement_learning.common.ckpt_io import save_rlt_checkpoint
+from AlphaBrain.training.reinforcement_learning.common.ckpt_io import save_rlt_checkpoint, maybe_resume
 from AlphaBrain.training.reinforcement_learning.eval.eval_helpers import _eval_deterministic_local
 from AlphaBrain.training.reinforcement_learning.eval.eval_helpers_rlt import (
     _eval_deterministic_local_rlt,
@@ -558,8 +558,12 @@ def run_rl_offpolicy(args):
             result = _run_eval_inline(iteration, save_video)
             _eval_results_queue.put(result)
             logger.info(f"[ASYNC EVAL @ iter {iteration}] done, SR={result['eval_sr']:.2%}")
-        except Exception:
-            logger.exception(f"[ASYNC EVAL @ iter {iteration}] crashed")
+        except Exception as e:
+            # In-train eval is monitoring only (report uses offline 50-ep). Under
+            # CPU oversubscription the eval's env.reset() can time out; that must
+            # NOT look like a fatal crash. Log concisely (no scary traceback),
+            # skip this interval's eval, training continues unaffected.
+            logger.warning(f"[ASYNC EVAL @ iter {iteration}] skipped (non-fatal): {e}")
         finally:
             _eval_thread_holder[0] = None
 
@@ -755,7 +759,14 @@ def run_rl_offpolicy(args):
         action_token_td_critic_update,
     )
 
-    for iteration in range(1, args.max_iter + 1):
+    # ── Resume from latest checkpoint of a prior same-named run (if --resume) ──
+    start_iter = maybe_resume(
+        args, args.run_name, args.output_dir,
+        encoder=enc_dec, actor=actor, critic=q_critic,
+        optimizers={"actor": optimizer_actor, "critic": optimizer_critic},
+        map_location="cpu")
+
+    for iteration in range(start_iter, args.max_iter + 1):
         # ── Drain all available rollout data (non-blocking after first) ────
         all_episodes = []
         # Block on first get (wait for rollout to produce data)
@@ -1057,7 +1068,8 @@ def run_rl_offpolicy(args):
         # ── 7. Checkpoint ────────────────────────────────
         if iteration % args.save_interval == 0:
             save_rlt_checkpoint(enc_dec, actor, q_critic,
-                                iteration, args.output_dir, phase="rl_offpolicy")
+                                iteration, args.output_dir, phase="rl_offpolicy",
+                                optimizers={"actor": optimizer_actor, "critic": optimizer_critic})
 
         last_completed_iter = iteration
 
@@ -1098,7 +1110,8 @@ def run_rl_offpolicy(args):
     # then accurately reflects the weights' true training iter instead of
     # silently naming itself iter_<max_iter>.
     save_rlt_checkpoint(enc_dec, actor, q_critic,
-                        last_completed_iter, args.output_dir, phase="rl_offpolicy")
+                        last_completed_iter, args.output_dir, phase="rl_offpolicy",
+                        optimizers={"actor": optimizer_actor, "critic": optimizer_critic})
     metrics_path = Path(args.output_dir) / "metrics.json"
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     with open(metrics_path, "w") as f:

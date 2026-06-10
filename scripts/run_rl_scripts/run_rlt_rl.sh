@@ -43,6 +43,7 @@ GPU_ID=${1:-0}
 TRACK=${TRACK:-rlt}
 BACKBONE=${BACKBONE:-qwen}
 TASK_ID=${TASK_ID:-0}
+SEED=${SEED:-42}
 
 # ── Backbone-specific defaults (ckpt + encoder dir prefix) ──
 # Encoder.pt format depends on TRACK (RLT's encoder-decoder cross-attention
@@ -83,20 +84,28 @@ case "${BACKBONE}" in
 esac
 
 CKPT_PATH="${CKPT_PATH:-${DEFAULT_CKPT}}"
-ENCODER_PATH="${ENCODER_PATH:-${DEFAULT_ENCODER}}"
+# Use `-` (not `:-`) so an explicitly-empty ENCODER_PATH="" is preserved (random
+# encoder init ablation) rather than being clobbered back to DEFAULT_ENCODER.
+ENCODER_PATH="${ENCODER_PATH-${DEFAULT_ENCODER}}"
 
 if [ ! -d "${CKPT_PATH}" ]; then
     echo "ERROR: VLA ckpt not found: ${CKPT_PATH}" >&2
     exit 1
 fi
-if [ -z "${ENCODER_PATH}" ] || [ ! -f "${ENCODER_PATH}" ]; then
+# Empty ENCODER_PATH = intentional random-init (skip Phase-1 pretrain) ablation;
+# only error when a path is given but the file is missing.
+if [ -n "${ENCODER_PATH}" ] && [ ! -f "${ENCODER_PATH}" ]; then
     echo "ERROR: encoder.pt not found: ${ENCODER_PATH:-<unset>}" >&2
     echo "       Run scripts/run_rl_scripts/run_rlt_pretrain.sh first." >&2
     exit 1
 fi
+[ -z "${ENCODER_PATH}" ] && echo "[info] ENCODER_PATH empty → random-init encoder (no Phase-1 pretrain)"
 
 TIMESTAMP=$(date +%m%d_%H%M)
-RUN_NAME="${TRACK}_rl_${BACKBONE_TAG}_t${TASK_ID}"
+# Allow caller to override RUN_NAME via env (e.g. RUN_NAME=rlt_td3_abl_beta0 to
+# disambiguate concurrent ablation launches that would otherwise share
+# OUTPUT_DIR — collision causes ckpts to corrupt each other.)
+RUN_NAME="${RUN_NAME:-${TRACK}_rl_${BACKBONE_TAG}_t${TASK_ID}}"
 OUTPUT_DIR="results/rlt_training/${RUN_NAME}_${TIMESTAMP}/rl_offpolicy"
 mkdir -p "${OUTPUT_DIR}"
 TRAIN_LOG="${OUTPUT_DIR}/train.log"
@@ -110,44 +119,68 @@ echo "   output:     ${OUTPUT_DIR}"
 echo "============================================================"
 
 export CUDA_VISIBLE_DEVICES=${GPU_ID}
+# Multi-GPU: GPU_ID may be a comma list (e.g. "1,2,3,4,5,6"). Make those visible;
+# trainer addresses them as remapped logical indices 0..N-1. By default rollout
+# uses ALL visible GPUs and train shares logical 0 (override via ROLLOUT_GPUS /
+# TRAIN_GPU). Single GPU_ID → ROLLOUT_GPUS="0", TRAIN_GPU=0 (unchanged behavior).
+_N_GPUS=$(echo "${GPU_ID}" | tr ',' '\n' | grep -c .)
+ROLLOUT_GPUS=${ROLLOUT_GPUS:-$(seq -s, 0 $((_N_GPUS - 1)))}
+TRAIN_GPU=${TRAIN_GPU:-0}
 
 # ── Track-specific RL hyperparams ──
 case "${TRACK}" in
     rlt)
-        # RLT: single-task, bottleneck=H, 8 heads, 1e-3 lr, 300 iters
+        # RLT: bottleneck=H, 8 heads, 1e-3 lr, 300 iters.
+        # Default = single-task (TASK_ID). Set MULTI_TASK=1 for --all_tasks
+        # multi-task (mirrors rlt_a branch; release alltasks protocol).
+        if [ "${MULTI_TASK:-0}" = "1" ]; then
+            TASK_FLAG="--all_tasks"
+            ROLLOUT_FLAGS="--G_per_task ${G_PER_TASK:-30} --group_size 1 --num_envs_per_task ${NUM_ENVS_PER_TASK:-10}"
+        else
+            TASK_FLAG="--task_id ${TASK_ID}"
+            ROLLOUT_FLAGS="--G ${G:-64} --group_size ${GROUP_SIZE:-8} --num_envs ${NUM_ENVS:-64}"
+        fi
         python AlphaBrain/training/reinforcement_learning/trainers/train.py \
             --phase rl_offpolicy --encoder_mode rlt \
             --ckpt_path "${CKPT_PATH}" --encoder_path "${ENCODER_PATH}" \
             --output_dir "${OUTPUT_DIR}" \
-            --suite libero_goal --task_id ${TASK_ID} \
-            --rollout_gpus 0 --train_gpu 0 \
+            --suite libero_goal ${TASK_FLAG} \
+            --rollout_gpus ${ROLLOUT_GPUS} --train_gpu ${TRAIN_GPU} \
             --bottleneck_dim 2048 --encoder_layers 2 --encoder_heads 8 \
             --actor_hidden_dim 512 --critic_hidden_dim 512 \
-            --ref_dropout 0.5 --fixed_std 0.1 \
-            --G 64 --group_size 8 --num_envs 64 \
+            --ref_dropout ${REF_DROPOUT:-0.5} --fixed_std 0.1 \
+            ${ROLLOUT_FLAGS} \
             --reward_coef 5.0 \
             --lr_actor 1e-3 --lr_critic 1e-3 --gamma 0.99 --max_grad_norm 1.0 \
-            --buffer_capacity 1000000 --buffer_warmup 256 --warmup_iters 5 \
+            --buffer_capacity ${BUFFER_CAPACITY:-1000000} --buffer_warmup 256 --warmup_iters 5 \
             --td_updates_per_iter 10000 --utd_ratio 10.0 --td_batch_size 1024 \
-            --tau 0.005 --beta 1.0 \
+            --tau 0.005 --beta ${BETA:-1.0} \
             --actor_update_freq 2 --target_noise_std 0.2 --target_noise_clip 0.5 \
-            --max_iter 300 --eval_interval 10 --eval_n_episodes 20 \
-            --save_interval 25 --save_video_interval 999 \
-            --seed 42 --use_wandb --wandb_project AlphaBrain_RLT \
-            --run_name "${RUN_NAME}" --log_interval 1 --use_steplock \
+            --max_iter ${MAX_ITER:-300} --eval_interval ${EVAL_INTERVAL:-10} --eval_n_episodes ${EVAL_N_EPISODES:-20} \
+            --save_interval ${SAVE_INTERVAL:-25} --save_video_interval 999 \
+            --seed ${SEED} --use_wandb --wandb_project AlphaBrain_RLT \
+            --run_name "${RUN_NAME}" ${RESUME:+--resume} --log_interval 1 --use_steplock \
             2>&1 | tee "${TRAIN_LOG}"
         ;;
 
     rlt_a)
-        # RLT_a: multi-task default, bottleneck=256, 4 heads, 3e-4 lr, 400 iters
+        # RLT_a: bottleneck=256, 4 heads, 3e-4 lr, 400 iters.
         # G_per_task/num_envs_per_task instead of G/num_envs (multi-task scaling).
+        # Default = multi-task (--all_tasks); set MULTI_TASK=0 to run a single
+        # task via TASK_ID — used for RLT_a vs RLT single-task comparison
+        # (see RL_REPORT_TABLES.md table 1).
+        if [ "${MULTI_TASK:-1}" = "1" ]; then
+            TASK_FLAG="--all_tasks"
+        else
+            TASK_FLAG="--task_id ${TASK_ID}"
+        fi
         python AlphaBrain/training/reinforcement_learning/trainers/train.py \
             --phase rl_offpolicy --encoder_mode action_token \
             --ckpt_path "${CKPT_PATH}" --encoder_path "${ENCODER_PATH}" \
             --output_dir "${OUTPUT_DIR}" \
-            --suite libero_goal --all_tasks \
+            --suite libero_goal ${TASK_FLAG} \
             --rollout_gpus 0 --train_gpu 0 \
-            --bottleneck_dim 256 --encoder_layers 2 --encoder_heads 4 \
+            --bottleneck_dim ${BOTTLENECK_DIM:-256} --encoder_layers 2 --encoder_heads 4 \
             --actor_hidden_dim 512 --critic_hidden_dim 512 \
             --ref_dropout 0.5 --fixed_std 0.1 \
             --G_per_task 30 --group_size 1 --num_envs_per_task 10 \
@@ -157,10 +190,10 @@ case "${TRACK}" in
             --td_updates_per_iter 10000 --utd_ratio 10.0 --td_batch_size 1024 \
             --tau 0.005 --beta 1.0 \
             --actor_update_freq 2 --target_noise_std 0.2 --target_noise_clip 0.5 \
-            --max_iter 400 --eval_interval 20 --eval_n_episodes 20 \
+            --max_iter ${MAX_ITER:-400} --eval_interval ${EVAL_INTERVAL:-20} --eval_n_episodes 20 \
             --save_interval 50 --save_video_interval 100 \
-            --seed 42 --use_wandb --wandb_project AlphaBrain_RLT \
-            --run_name "${RUN_NAME}" --log_interval 1 --use_steplock \
+            --seed ${SEED} --use_wandb --wandb_project AlphaBrain_RLT \
+            --run_name "${RUN_NAME}" ${RESUME:+--resume} --log_interval 1 --use_steplock \
             2>&1 | tee "${TRAIN_LOG}"
         ;;
 
