@@ -133,8 +133,10 @@ def routes():
 STD = {
     "RLT_a+PPO": _seed_std(0.936, ["results/eval_mt_seeds_0607/rlt_a_ppo_qwen_alltasks_s43v2.json",
                                    "results/eval_mt_seeds_0607/rlt_a_ppo_qwen_alltasks_s44v2.json"]),
-    "RLT+PPO":   _seed_std(0.916, ["results/eval_mt_seeds_0607/rlt_ppo_qwen_alltasks_s44v2.json"]),
-    "RLT+GRPO":  _seed_std(0.720, ["results/eval_mt_seeds_0607/rlt_grpo_qwen_alltasks_s44v2.json"]),
+    "RLT+PPO":   _seed_std(0.916, ["results/eval_mt_seeds_0607/rlt_ppo_qwen_alltasks_s43v3.json",
+                                   "results/eval_mt_seeds_0607/rlt_ppo_qwen_alltasks_s44v2.json"]),
+    "RLT+GRPO":  _seed_std(0.720, ["results/eval_mt_seeds_0607/rlt_grpo_qwen_alltasks_s43v3.json",
+                                   "results/eval_mt_seeds_0607/rlt_grpo_qwen_alltasks_s44v2.json"]),
 }
 
 
