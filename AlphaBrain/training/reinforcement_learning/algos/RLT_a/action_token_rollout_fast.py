@@ -69,7 +69,7 @@ def _env_step_chunk(env_pool, env_idx, action_chunk_unnorm, chunk_len, record_fr
     actions = [_postprocess_action(action_chunk_unnorm[step]) for step in range(chunk_len)]
     try:
         obs, reward, done, steps_taken = env_pool.envs[env_idx].step_chunk(actions)
-    except RuntimeError as e:
+    except Exception as e:  # noqa: BLE001 — any env error (timeout, dead worker, EGL) → soft-fail this env, never crash the rollout
         print(f"  [WARNING] env {env_idx} step_chunk failed: {e}, marking as done", flush=True)
         # Return a fake "failed" result — episode will be marked as failure
         obs = {"primary_image": np.zeros((256,256,3), dtype=np.uint8),
@@ -91,7 +91,7 @@ def _env_dummy_steps(env_pool, env_idx, n_steps):
     for _ in range(n_steps):
         try:
             obs, _, _ = env_pool.step_env(env_idx, DUMMY_ACTION)
-        except RuntimeError as e:
+        except Exception as e:  # noqa: BLE001 — any env error → soft-fail this env, never crash the rollout
             print(f"  [WARNING] env {env_idx} dummy step failed: {e}", flush=True)
             return {"primary_image": np.zeros((256, 256, 3), dtype=np.uint8),
                     "wrist_image": np.zeros((256, 256, 3), dtype=np.uint8),
@@ -157,26 +157,44 @@ def action_token_collect_group_steplock(
     n_workers = min(G, len(env_pool))
 
     # ── Phase 1: Reset all envs in parallel ──
+    # Per-env soft-fail (see action_token_collect_multitask_steplock): a reset
+    # that raises after the pool's retries are exhausted must NOT kill the run.
     from concurrent.futures import as_completed as _as_completed
     obs_list = [None] * G
+    dead = set()
+    _zero_obs = {"primary_image": np.zeros((256, 256, 3), dtype=np.uint8),
+                 "wrist_image": np.zeros((256, 256, 3), dtype=np.uint8),
+                 "state": np.zeros(8, dtype=np.float32)}
     with ThreadPoolExecutor(max_workers=G) as _pool:
         _futs = {_pool.submit(env_pool.reset_env, env_offset + g, suite_name, task_id, int(state_ids[g]), seed + g): g for g in range(G)}
         for _f in _as_completed(_futs):
-            obs_list[_futs[_f]] = _f.result()
-    print(f"  reset done: {G} envs (parallel)", flush=True)
+            g = _futs[_f]
+            try:
+                obs_list[g] = _f.result()
+            except Exception as e:  # noqa: BLE001 — any reset failure → soft-drop env
+                dead.add(g)
+                obs_list[g] = _zero_obs
+                print(f"  [WARNING] env {env_offset + g} reset failed ({e}); dropping "
+                      f"from this iter ({G - len(dead)}/{G} envs continue)", flush=True)
+    if len(dead) == G:
+        raise RuntimeError(
+            f"All {G} envs failed to reset — env pool unrecoverable "
+            f"(check CPU oversubscription / worker subprocesses)")
+    print(f"  reset done: {G - len(dead)}/{G} envs (parallel)", flush=True)
 
     task_descriptions = [env_pool.envs[env_offset + g].task_description for g in range(G)]
 
-    # ── Phase 2: Warmup dummy steps (parallel) ──
+    # ── Phase 2: Warmup dummy steps (parallel) ── skip dead envs
     if num_steps_wait > 0:
-        with ThreadPoolExecutor(max_workers=G) as _pool:
-            _futs = {_pool.submit(_env_dummy_steps, env_pool, env_offset + g, num_steps_wait): g for g in range(G)}
+        _warm = [g for g in range(G) if g not in dead]
+        with ThreadPoolExecutor(max_workers=max(1, len(_warm))) as _pool:
+            _futs = {_pool.submit(_env_dummy_steps, env_pool, env_offset + g, num_steps_wait): g for g in _warm}
             for _f in _as_completed(_futs):
                 obs_list[_futs[_f]] = _f.result()
 
     # ── Phase 3: Step-lock main loop ──
     episodes = [ActionTokenEpisode(task_id=task_id, state_idx=int(state_ids[g])) for g in range(G)]
-    active = [True] * G  # which envs are still running
+    active = [g not in dead for g in range(G)]  # dead-on-reset envs start inactive
     env_steps = [0] * G
     all_frames = [[] for _ in range(G)]  # video frames
 
@@ -332,6 +350,10 @@ def action_token_collect_group_steplock(
                                  f"g{group_idx:04d}_e{g:02d}_t{task_id}_s{int(state_ids[g]):02d}_{status}.mp4")
             ep.video_path = _save_video(all_frames[g], vpath)
 
+    # Drop soft-failed (dead-on-reset) episodes — no step_records → would create
+    # degenerate groups in advantage normalization.
+    if dead:
+        episodes = [ep for g, ep in enumerate(episodes) if g not in dead]
     return episodes
 
 
@@ -397,27 +419,57 @@ def action_token_collect_multitask_steplock(
     n_workers = min(total_G, len(env_pool))
 
     # ── Phase 1: Reset all envs in parallel ──
+    # Per-env soft-fail: if reset_env raises (env worker timed out and the
+    # pool's retry/backoff was exhausted under CPU oversubscription), DON'T
+    # propagate — that would kill the whole training run. Instead mark this
+    # env dead, drop it from this iter's batch, and continue with the rest.
+    # The pool auto-resets the worker next iter, so it can rejoin later.
+    # (Phase 2/3 already soft-fail via _env_dummy_steps / _env_step_chunk;
+    #  Phase 1 was the only unguarded spot — root cause of the 0603 run deaths.)
     from concurrent.futures import as_completed as _as_completed
     obs_list = [None] * total_G
+    dead = set()
+    _zero_obs = {"primary_image": np.zeros((256, 256, 3), dtype=np.uint8),
+                 "wrist_image": np.zeros((256, 256, 3), dtype=np.uint8),
+                 "state": np.zeros(8, dtype=np.float32)}
     with ThreadPoolExecutor(max_workers=total_G) as _pool:
         _futs = {_pool.submit(env_pool.reset_env, g, suite_name, all_task_labels[g], int(all_state_ids[g]), seed + g): g for g in range(total_G)}
         for _f in _as_completed(_futs):
-            obs_list[_futs[_f]] = _f.result()
-    print(f"  reset done: {total_G} envs (parallel)", flush=True)
+            g = _futs[_f]
+            try:
+                obs_list[g] = _f.result()
+            except Exception as e:  # noqa: BLE001 — any reset failure → soft-drop env
+                dead.add(g)
+                obs_list[g] = _zero_obs
+                print(f"  [WARNING] env {g} reset failed ({e}); dropping from this "
+                      f"iter (run continues with {total_G - len(dead)}/{total_G} envs)",
+                      flush=True)
+    if len(dead) == total_G:
+        raise RuntimeError(
+            f"All {total_G} envs failed to reset — env pool is unrecoverable "
+            f"(check CPU oversubscription / worker subprocesses)")
+    if dead:
+        print(f"  reset done: {total_G - len(dead)}/{total_G} envs OK, "
+              f"{len(dead)} dropped (soft-fail)", flush=True)
+    else:
+        print(f"  reset done: {total_G} envs (parallel)", flush=True)
 
     task_descriptions = [env_pool.envs[g].task_description for g in range(total_G)]
 
-    # ── Phase 2: Warmup (parallel) ──
+    # ── Phase 2: Warmup (parallel) ── skip dead envs (avoid wasting their timeouts)
     if num_steps_wait > 0:
-        with ThreadPoolExecutor(max_workers=total_G) as _pool:
-            _futs = {_pool.submit(_env_dummy_steps, env_pool, g, num_steps_wait): g for g in range(total_G)}
+        _warm = [g for g in range(total_G) if g not in dead]
+        with ThreadPoolExecutor(max_workers=max(1, len(_warm))) as _pool:
+            _futs = {_pool.submit(_env_dummy_steps, env_pool, g, num_steps_wait): g for g in _warm}
             for _f in _as_completed(_futs):
                 obs_list[_futs[_f]] = _f.result()
 
     # ── Phase 3: Step-lock main loop (ALL tasks merged) ──
     episodes = [ActionTokenEpisode(task_id=all_task_labels[g], state_idx=int(all_state_ids[g]))
                 for g in range(total_G)]
-    active = [True] * total_G
+    # Dead envs start inactive → excluded from the step loop; finalized below as
+    # zero-reward failures (so episode count stays total_G for the trainer).
+    active = [g not in dead for g in range(total_G)]
     env_steps = [0] * total_G
     max_chunks = max_steps // exec_chunk_len + 1
 
@@ -510,4 +562,8 @@ def action_token_collect_multitask_steplock(
                      f"{_n_chunks} chunks | vla={_t_vla:.1f}s env={_t_env:.1f}s "
                      f"total={_t_vla+_t_env:.1f}s")
 
+    # Drop soft-failed (dead-on-reset) episodes — they have no step_records and
+    # would create empty/degenerate groups in GRPO/PPO advantage normalization.
+    if dead:
+        episodes = [ep for g, ep in enumerate(episodes) if g not in dead]
     return episodes

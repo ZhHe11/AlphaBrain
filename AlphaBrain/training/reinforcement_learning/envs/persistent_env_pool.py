@@ -39,6 +39,24 @@ _WORKER_TIMEOUT = float(os.environ.get("LIBERO_WORKER_TIMEOUT", "300"))
 # unbounded BLAS threads (4-8x per worker x ~90 workers) are the hidden load
 # multiplier behind the thrash. Pin to 1 thread/worker unless overridden.
 _WORKER_THREAD_LIMIT = os.environ.get("LIBERO_WORKER_THREADS", "1")
+# Per-worker lifetime restart cap (circuit breaker). A worker that keeps failing
+# (persistent EGL/render crash, OOM in the render context, or chronic CPU
+# starvation) would otherwise be restarted on EVERY reset/step call forever -- a
+# restart storm that hangs the whole run (observed: a 1-traj TD3 run stuck at
+# iter-25 with 63 restarts, and old runs stuck at iter-50 for 15h). After this
+# many lifetime restarts the env is marked PERMANENTLY DEAD and raises
+# immediately (cheap, no respawn) so the rollout collector soft-drops it from the
+# batch instead of paying a restart+backoff every iteration.
+_MAX_LIFETIME_RESTARTS = int(os.environ.get("LIBERO_WORKER_MAX_RESTARTS", "8"))
+
+
+class WorkerPermanentlyDead(RuntimeError):
+    """A worker exceeded its lifetime restart budget. Subclasses RuntimeError so
+    every rollout collector's existing ``except RuntimeError`` soft-fail handler
+    catches it automatically and drops the env for the rest of the run rather than
+    restarting it again. It is raised from the top of reset/step/step_chunk (and
+    once from _restart_worker when the cap trips, inside an except block, so it
+    still propagates out cleanly rather than being re-caught by the retry loop)."""
 
 
 # ── Socket-based IPC (replaces pipe-based _write_msg/_read_msg) ──
@@ -111,6 +129,9 @@ class _FastLiberoEnv:
         self.task_description: str = ""
         self.max_steps: int = 300
         self._closed = False
+        # Circuit-breaker state (see _MAX_LIFETIME_RESTARTS).
+        self._restart_count = 0
+        self._permanently_dead = False
 
         # After _restart_worker(), the new subprocess has no env loaded — any
         # step()/step_chunk() before reset() would BrokenPipe. Track last
@@ -137,8 +158,30 @@ class _FastLiberoEnv:
         child_sock.close()  # parent doesn't need child's end
 
     def _restart_worker(self):
-        """Kill and restart the worker subprocess."""
-        print(f"  [WARNING] Restarting hung LIBERO worker...", flush=True)
+        """Kill and restart the worker subprocess. Circuit breaker: after
+        _MAX_LIFETIME_RESTARTS restarts, stop respawning and mark the env
+        permanently dead (raise WorkerPermanentlyDead) so the run soft-fails this
+        env instead of storming restarts forever."""
+        self._restart_count += 1
+        if self._restart_count > _MAX_LIFETIME_RESTARTS:
+            self._permanently_dead = True
+            print(f"  [DEAD] LIBERO worker exceeded {_MAX_LIFETIME_RESTARTS} "
+                  f"lifetime restarts — soft-failing this env permanently "
+                  f"(no respawn).", flush=True)
+            try:
+                if self._sock:
+                    self._sock.close()
+            except Exception:
+                pass
+            try:
+                if self._proc:
+                    self._proc.kill()
+            except Exception:
+                pass
+            raise WorkerPermanentlyDead(
+                f"worker exceeded {_MAX_LIFETIME_RESTARTS} lifetime restarts")
+        print(f"  [WARNING] Restarting hung LIBERO worker... "
+              f"(restart {self._restart_count}/{_MAX_LIFETIME_RESTARTS})", flush=True)
         if self._sock:
             try:
                 self._sock.close()
@@ -181,6 +224,8 @@ class _FastLiberoEnv:
         self._needs_reset = False
 
     def reset(self, suite_name: str, task_id: int, initial_state_idx: int = 0, seed: int = 42) -> dict:
+        if self._permanently_dead:
+            raise WorkerPermanentlyDead("env permanently dead (restart cap exceeded)")
         # Retry with exp backoff to survive transient CPU oversubscription
         # (load >> nproc → MuJoCo workers can't respond inside 120s). After
         # _RESET_MAX_RETRIES exhausted, raise — caller decides whether to
@@ -221,6 +266,8 @@ class _FastLiberoEnv:
         )
 
     def step(self, action_7d: np.ndarray) -> Tuple[dict, float, bool]:
+        if self._permanently_dead:
+            raise WorkerPermanentlyDead("env permanently dead (restart cap exceeded)")
         # Step retries are looser than reset: if a worker dies mid-rollout, the
         # MuJoCo physics state is lost, so we can only restart + auto-reset and
         # retry from there. Caller (rollout) can also catch and skip this env.
@@ -246,6 +293,8 @@ class _FastLiberoEnv:
 
     def step_chunk(self, actions: list) -> Tuple[dict, float, bool, int]:
         """Execute multiple actions in one round-trip. Returns (obs, reward, done, steps_taken)."""
+        if self._permanently_dead:
+            raise WorkerPermanentlyDead("env permanently dead (restart cap exceeded)")
         last_exc: Optional[BaseException] = None
         for attempt in range(_STEP_MAX_RETRIES + 1):
             try:
