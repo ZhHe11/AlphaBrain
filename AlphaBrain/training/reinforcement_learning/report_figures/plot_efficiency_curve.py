@@ -270,7 +270,11 @@ def fig_sample_efficiency():
 def main():
     fig_grid()
     fig_vs_vla()
-    fig_sample_efficiency()
+    # fig_sample_efficiency() removed 2026-06-10: the env-step axis unfairly
+    # penalizes off-policy TD3 (it collects ~5.7x more env-steps/iter to fill its
+    # replay buffer), making the "sample efficiency" claim a collection-rate
+    # artifact rather than a data-efficiency result. Iteration-axis fig6a is the
+    # clean comparison. Function kept for reference but no longer emitted.
 
 
 if __name__ == "__main__":
