@@ -125,8 +125,10 @@ def routes():
             "results/eval_effcurve_0608/rlta_ppo_iter*.json", "results/eval_p0_50ep_0529/mt_rlta_ppo.json")),
         "RLT_a+GRPO": dict(algo="GRPO", enc="RLT_a", pts=_glob_curve(
             "results/eval_effcurve_0608/rlta_grpo_iter*.json", "results/eval_p0_50ep_0529/mt_rlta_grpo.json")),
-        # no intermediate checkpoints -> end-point only
-        "RLT_a+TD3":  dict(algo="TD3",  enc="RLT_a", pts={0: 0.0, 300: 0.920}, endpoint_only=True),
+        # per-iter curve from the 0610 re-train (#20); endpoint anchored at the
+        # released 0.92 until #20's own iter300 eval lands.
+        "RLT_a+TD3":  dict(algo="TD3",  enc="RLT_a", pts={
+            **_glob_curve("results/eval_effcurve_0610/rlta_td3_iter*.json"), 300: 0.920}),
     }
 
 
