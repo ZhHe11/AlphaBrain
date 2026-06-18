@@ -29,6 +29,8 @@ def vla_grpo_loss(
     ref_policy: VLAPolicy,      # frozen reference VLA (no grad)
     episodes: List[VLAPPOEpisode],
     clip_eps: float = 0.2,
+    clip_eps_high: float = 0.0, # DAPO clip-higher: asymmetric upper bound (0=symmetric=clip_eps)
+    dual_clip_c: float = 0.0,   # DAPO dual-clip: cap on negative-adv loss (0=disabled; DAPO=3.0)
     kl_coef: float = 0.04,
     micro_batch: int = 2,
     device: str = "cuda",
@@ -153,8 +155,21 @@ def vla_grpo_loss(
 
         ratio = torch.exp(new_lp - old_lp_b)
         surr1 = ratio * adv_b
-        surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv_b
-        pg = -torch.min(surr1, surr2).mean()
+        # DAPO clip-higher: decouple lower/upper clip bounds. Upper bound
+        # (1+eps_high) > lower (1-eps_low) lets low-prob good actions grow more
+        # aggressively. eps_high=0 falls back to the symmetric PPO clip.
+        eps_high = clip_eps_high if clip_eps_high > 0 else clip_eps
+        surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + eps_high) * adv_b
+        clipped = torch.min(surr1, surr2)
+        if dual_clip_c > 1.0:
+            # DAPO dual-clip: for negative-advantage samples, lower-bound the
+            # objective at dual_clip_c * adv so a single huge ratio can't blow
+            # up the update. (For adv>=0, standard min-clip is the cap.)
+            dual = dual_clip_c * adv_b
+            obj = torch.where(adv_b < 0, torch.max(clipped, dual), clipped)
+        else:
+            obj = clipped
+        pg = -obj.mean()
         log_ratio_ref = ref_lp - new_lp
         kl = (torch.exp(log_ratio_ref) - log_ratio_ref - 1.0).mean()
 

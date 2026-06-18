@@ -130,6 +130,12 @@ def parse_args():
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--gae_lambda", type=float, default=0.95)
     p.add_argument("--clip_eps", type=float, default=0.2)
+    p.add_argument("--clip_eps_high", type=float, default=0.0,
+                   help="DAPO clip-higher: asymmetric upper clip bound (e.g. 0.28). "
+                        "0 = symmetric (use clip_eps on both sides).")
+    p.add_argument("--dual_clip_c", type=float, default=0.0,
+                   help="DAPO dual-clip constant (e.g. 3.0): lower-bound on the "
+                        "negative-advantage objective. 0/<=1 = disabled.")
     p.add_argument("--vf_coef", type=float, default=0.5)
     p.add_argument("--recon_loss_coef", type=float, default=0.1)
     p.add_argument("--max_grad_norm", type=float, default=1.0)

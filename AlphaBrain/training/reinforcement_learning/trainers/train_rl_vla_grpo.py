@@ -392,6 +392,8 @@ def run_rl_vla_grpo(args):
                     policy=policy, ref_policy=ref_policy,
                     episodes=local_episodes,
                     clip_eps=args.clip_eps,
+                    clip_eps_high=args.clip_eps_high,
+                    dual_clip_c=args.dual_clip_c,
                     kl_coef=args.grpo_kl_coef,
                     micro_batch=args.micro_batch,
                     device=device,
