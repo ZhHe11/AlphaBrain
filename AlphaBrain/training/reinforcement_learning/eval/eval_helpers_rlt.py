@@ -146,6 +146,16 @@ def _eval_deterministic_local_rlt(
                       f"  running SR={running_sr:.2%}  (last ep {ep_idx} "
                       f"{'SUCCESS' if success else 'fail'})",
                       flush=True)
+        except (RuntimeError, TimeoutError, ConnectionError, BrokenPipeError) as e:
+            # Env worker timed out (e.g. CPU oversubscription during in-train
+            # eval) and the pool's retries were exhausted. SKIP this episode
+            # instead of aborting the whole eval — it's excluded from the
+            # denominator (SR = n_success / len(results)), so an infra failure
+            # doesn't get charged to the policy. Offline eval on an unloaded box
+            # never hits this; in-train monitoring eval degrades gracefully.
+            print(f"  [eval-rlt] task {task_id} rank {rank}: ep {ep_idx} SKIPPED "
+                  f"(env failure: {e})", flush=True)
+            continue
         finally:
             env.close()
 

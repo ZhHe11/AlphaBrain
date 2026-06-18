@@ -90,7 +90,10 @@ _cleanup () {
         kill -TERM -- "-${pid}" 2>/dev/null || true
     done
     [ "${#TAIL_PIDS[@]}" -gt 0 ] && kill "${TAIL_PIDS[@]}" 2>/dev/null || true
-    pkill -TERM -u "$(id -u)" -f "AlphaBrain/training/reinforcement_learning/envs/libero_env_worker" 2>/dev/null || true
+    # NOTE: do NOT pkill -f libero_env_worker here — it is uid-wide and would
+    # kill the workers of OTHER concurrent libero jobs (training + other evals),
+    # cascading them all to "worker exited unexpectedly". The per-shard
+    # kill -- -PGID above already reaps this script's own workers.
 }
 trap _cleanup EXIT INT TERM
 
@@ -120,6 +123,8 @@ launch_one () {
         --actor_hidden_dim ${ACTOR_HIDDEN_DIM} \
         --ref_dropout ${REF_DROPOUT} \
         --fixed_std ${FIXED_STD} \
+        --prop_dim ${PROP_DIM:-8} \
+        ${RESIDUAL:+--residual} \
         > "${log}" 2>&1 &
     local pid=$!
     SHARD_PIDS+=(${pid})

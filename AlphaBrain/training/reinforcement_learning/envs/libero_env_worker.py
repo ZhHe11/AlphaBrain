@@ -20,9 +20,25 @@ Responses sent (to parent):
 """
 
 import io
+import os
 import struct
 import sys
 import traceback
+
+# ── Isolate the protocol pipe from stdout pollution ────────────────────────────
+# The wire protocol writes msgpack frames to fd 1 (parent's read end of our
+# stdout pipe). Any stray write to sys.stdout from imports or env code (LIBERO
+# / robosuite / MuJoCo *do* `print(...)` at runtime) would prepend junk to the
+# response stream; the parent then decodes the first 4 stray bytes as a uint32
+# length prefix and blocks reading 100s of MB of data that will never arrive
+# (observed pollution leads to length ≈ 0x666c8000 = 1.7 GB → indefinite hang).
+#
+# Save fd 1 aside, then redirect fd 1 → fd 2 so every print() lands on stderr
+# (which the parent reads only for diagnostics, not protocol). The protocol
+# writer uses _PROTO_FD directly.
+_PROTO_FD = os.dup(1)
+os.dup2(2, 1)
+sys.stdout = sys.stderr  # belt-and-suspenders: Python-level stdout → stderr
 
 import msgpack
 import numpy as np
@@ -102,7 +118,10 @@ def _parse_obs(obs: dict) -> dict:
 
 def main():
     stdin  = sys.stdin.buffer
-    stdout = sys.stdout.buffer
+    # Write protocol frames directly to the saved fd (= original fd 1). This
+    # bypasses sys.stdout (now redirected to stderr) entirely; library prints
+    # cannot corrupt this stream.
+    stdout = os.fdopen(_PROTO_FD, "wb", buffering=0)
 
     env = None
     task_suite_cache = {}  # suite_name -> task_suite object

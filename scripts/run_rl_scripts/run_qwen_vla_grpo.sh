@@ -98,7 +98,7 @@ python -u AlphaBrain/training/reinforcement_learning/trainers/train.py \
     --G ${G} --num_envs ${NUM_ENVS} --group_size ${GROUP_SIZE} \
     --reward_coef 5.0 \
     --lr_vla ${LR_VLA} \
-    --fixed_std 0.1 \
+    --fixed_std ${FIXED_STD:-0.1} \
     --ppo_epochs ${PPO_EPOCHS} --micro_batch ${MICRO_BATCH} \
     --clip_eps 0.2 --grpo_kl_coef ${KL_COEF} \
     --ref_update_interval ${REF_UPD_INT} \

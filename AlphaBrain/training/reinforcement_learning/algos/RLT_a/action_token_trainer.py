@@ -1321,6 +1321,7 @@ def action_token_grpo_loss(
     episodes: List['ActionTokenEpisode'],
     clip_eps: float = 0.2,
     kl_coef: float = 0.04,
+    bc_coef: float = 0.0,
     device: str = "cuda",
 ):
     """GRPO loss on a batch of episodes grouped by initial state.
@@ -1329,18 +1330,24 @@ def action_token_grpo_loss(
         advantage_i = (R_i - mean(R_group)) / (std(R_group) + eps)
     A group with only one episode contributes zero advantage signal.
 
-    Loss = -E[min(ratio * A, clip(ratio, 1±ε) * A)]  +  kl_coef * KL(π || π_ref)
+    Loss = -E[min(ratio·A, clip(ratio,1±ε)·A)] + kl_coef·KL(π‖π_ref) + bc_coef·E‖μ−ã‖²
     where ratio = exp(log π_new - log π_old), and KL uses the k3 estimator:
         kl ≈ exp(ref_lp - new_lp) - (ref_lp - new_lp) - 1   (always ≥ 0)
+    The bc_coef·‖μ−ã‖² term anchors the policy mean to the VLA reference —
+    needed for cold-start (see note at the term below).
 
     Returns: (loss, stats_dict).
     """
     from collections import defaultdict
 
     # ── 1. Group-relative episode-level advantages ────────────────────
+    # Group by (task_id, state_idx): in multi-task batches different tasks
+    # reuse the same state_idx values, so keying on state_idx alone would
+    # merge unrelated episodes and contaminate the group-relative baseline.
+    # For single-task batches every ep shares task_id → identical behaviour.
     groups = defaultdict(list)
     for ep_idx, ep in enumerate(episodes):
-        groups[ep.state_idx].append((ep_idx, ep))
+        groups[(ep.task_id, ep.state_idx)].append((ep_idx, ep))
 
     ep_advantages = [0.0] * len(episodes)
     for state_idx, group in groups.items():
@@ -1393,12 +1400,37 @@ def action_token_grpo_loss(
     kl = torch.exp(log_ratio_ref) - log_ratio_ref - 1.0
     kl_loss = kl.mean()
 
-    loss = pg_loss + kl_coef * kl_loss
+    # ── 5. BC anchor — μ_θ(x, ã) ≈ ã  (β‖a − ã‖², same term TD3 uses) ──
+    # Critical for cold-start: with sparse binary reward, when every episode
+    # in a group fails the group-relative advantage is 0 → pg_loss has no
+    # gradient. The fresh ActionTokenActor outputs ≈0 (near-zero-init head)
+    # so it never lands a success and GRPO stays dead. The BC term still
+    # provides gradient — it pulls the actor mean toward the VLA reference
+    # action, so the policy reaches a non-zero SR and PG then gets signal.
+    if bc_coef > 0.0:
+        mean, _ = actor(rl_tokens, vla_actions, prop_states, deterministic=True)
+        bc_penalty = ((mean - vla_actions) ** 2).sum(dim=(-2, -1)).mean()
+    else:
+        bc_penalty = torch.zeros((), device=device)
+
+    # Gate the PG/KL update on reward signal. At cold-start every episode
+    # fails → advantages are all 0 → pg has no signal; running the PG/KL
+    # machinery anyway destabilizes the BC-warmed actor (the KL k3
+    # estimator blows up — observed kl spiking to 1e4). With no signal,
+    # optimize the BC anchor only, so the actor holds ≈VLA until a rollout
+    # finally lands a success and a real group-relative advantage appears.
+    has_signal = bool(advantages.abs().max().item() > 1e-6)
+    if has_signal:
+        loss = pg_loss + kl_coef * kl_loss + bc_coef * bc_penalty
+    else:
+        loss = bc_coef * bc_penalty
 
     stats = {
         "loss": loss.item(),
+        "has_signal": float(has_signal),
         "pg_loss": pg_loss.item(),
         "kl": kl_loss.item(),
+        "bc_penalty": float(bc_penalty.item()),
         "ratio_mean": ratio.mean().item(),
         "clip_frac": ((ratio - 1.0).abs() > clip_eps).float().mean().item(),
         "advantage_mean": advantages.mean().item(),

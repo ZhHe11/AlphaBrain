@@ -55,6 +55,9 @@ def parse_args():
     p.add_argument("--ref_dropout", type=float, default=0.5)
     p.add_argument("--fixed_std", type=float, default=0.1)
     p.add_argument("--prop_dim", type=int, default=8)
+    p.add_argument("--residual", action="store_true",
+                   help="actor μ = ã + Δ (must match training; GRPO/PPO use residual=True, "
+                        "TD3 release uses False)")
     p.add_argument("--num_steps_wait", type=int, default=10)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--video_dir", default=None,
@@ -235,6 +238,7 @@ def main():
         ref_dropout=args.ref_dropout,
         fixed_std=args.fixed_std,
         prop_dim=args.prop_dim,
+        residual=args.residual,
     ).to(device)
     actor_state = torch.load(os.path.join(args.action_token_ckpt, "actor.pt"),
                              map_location=device)

@@ -28,13 +28,23 @@ from AlphaBrain.training.reinforcement_learning.eval.eval_helpers import _eval_d
 from AlphaBrain.training.reinforcement_learning.envs.libero_env import MAX_STEPS, get_suite_info
 from AlphaBrain.training.reinforcement_learning.algos.RLT_a.action_token_actor_critic import ActionTokenActor
 from AlphaBrain.training.reinforcement_learning.algos.RLT_a.action_token_encoder_decoder import ActionTokenEncoderDecoder
+from AlphaBrain.training.reinforcement_learning.algos.RLT.pi05_inference import resolve_vla_metadata
 
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--vla_ckpt", required=True, help="QwenOFT SFT base checkpoint dir")
-    p.add_argument("--action_token_ckpt", required=True,
-                   help="RLT_a iter checkpoint dir containing encoder.pt and actor.pt")
+    p.add_argument("--action_token_ckpt", default=None,
+                   help="RLT_a iter checkpoint dir containing encoder.pt and actor.pt "
+                        "(not required with --base_vla)")
+    p.add_argument("--base_vla", action="store_true",
+                   help="Evaluate the frozen base VLA only (no RL encoder/actor); "
+                        "produces the T1 base anchor under the RL eval protocol")
+    p.add_argument("--vla_state_dict", default=None,
+                   help="If set, load this state_dict (.pt) onto the base VLA "
+                        "after from_pretrained — used to eval VLA-RL-finetuned "
+                        "checkpoints (train_rl_vla_ppo/grpo saves only state_dict, "
+                        "not an HF-format dir). Combine with --base_vla.")
     p.add_argument("--suite", default="libero_goal")
     p.add_argument("--n_eps_per_task", type=int, default=20)
     p.add_argument("--gpu", type=int, default=0)
@@ -45,6 +55,9 @@ def parse_args():
     p.add_argument("--ref_dropout", type=float, default=0.5)
     p.add_argument("--fixed_std", type=float, default=0.1)
     p.add_argument("--prop_dim", type=int, default=8)
+    p.add_argument("--residual", action="store_true",
+                   help="Actor predicts a residual on the decoded action token "
+                        "(GRPO/PPO use residual=True; off-policy TD3 uses False)")
     p.add_argument("--num_steps_wait", type=int, default=10)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--video_dir", default=None,
@@ -66,49 +79,61 @@ def main():
     print(f"Loading frozen VLA from {args.vla_ckpt}")
     frozen_vla = BaseFramework.from_pretrained(args.vla_ckpt)
     frozen_vla = frozen_vla.to(torch.bfloat16).to(device).eval()
+    if args.vla_state_dict:
+        print(f"Overlaying VLA state_dict from {args.vla_state_dict}")
+        sd = torch.load(args.vla_state_dict, map_location=device)
+        missing, unexpected = frozen_vla.load_state_dict(sd, strict=False)
+        if missing:
+            print(f"  WARN missing keys: {len(missing)} (first 3: {missing[:3]})")
+        if unexpected:
+            print(f"  WARN unexpected keys: {len(unexpected)} (first 3: {unexpected[:3]})")
+        frozen_vla = frozen_vla.to(torch.bfloat16).to(device).eval()
     for p in frozen_vla.parameters():
         p.requires_grad_(False)
 
-    hidden_dim = frozen_vla.qwen_vl_interface.model.config.hidden_size
-    chunk_len = frozen_vla.chunk_len
-    action_dim = frozen_vla.config.framework.action_model.action_dim
-    norm_stats = frozen_vla.norm_stats
-    unnorm_key = next(iter(norm_stats.keys()))
-    action_norm_stats = norm_stats[unnorm_key]["action"]
+    hidden_dim, action_norm_stats, chunk_len, action_dim = resolve_vla_metadata(frozen_vla)
     print(f"  hidden_dim={hidden_dim} chunk_len={chunk_len} action_dim={action_dim}")
 
-    print(f"Loading encoder from {args.action_token_ckpt}/encoder.pt")
-    encoder = ActionTokenEncoderDecoder(
-        input_dim=hidden_dim,
-        bottleneck_dim=args.bottleneck_dim,
-        chunk_len=chunk_len,
-        num_heads=args.encoder_heads,
-        encoder_layers=args.encoder_layers,
-        decoder_layers=args.encoder_layers,
-    ).to(device)
-    enc_state = torch.load(os.path.join(args.action_token_ckpt, "encoder.pt"),
-                           map_location=device)
-    encoder.load_state_dict(enc_state)
-    encoder.eval()
-    for p in encoder.parameters():
-        p.requires_grad_(False)
+    if args.base_vla:
+        print("Base-VLA-only eval: skipping encoder/actor load")
+        encoder = None
+        actor = None
+    else:
+        if args.action_token_ckpt is None:
+            raise ValueError("--action_token_ckpt is required unless --base_vla is set")
+        print(f"Loading encoder from {args.action_token_ckpt}/encoder.pt")
+        encoder = ActionTokenEncoderDecoder(
+            input_dim=hidden_dim,
+            bottleneck_dim=args.bottleneck_dim,
+            chunk_len=chunk_len,
+            num_heads=args.encoder_heads,
+            encoder_layers=args.encoder_layers,
+            decoder_layers=args.encoder_layers,
+        ).to(device)
+        enc_state = torch.load(os.path.join(args.action_token_ckpt, "encoder.pt"),
+                               map_location=device)
+        encoder.load_state_dict(enc_state)
+        encoder.eval()
+        for p in encoder.parameters():
+            p.requires_grad_(False)
 
-    print(f"Loading actor from {args.action_token_ckpt}/actor.pt")
-    actor = ActionTokenActor(
-        bottleneck_dim=args.bottleneck_dim,
-        action_dim=action_dim,
-        chunk_len=chunk_len,
-        hidden_dim=args.actor_hidden_dim,
-        ref_dropout=args.ref_dropout,
-        fixed_std=args.fixed_std,
-        prop_dim=args.prop_dim,
-    ).to(device)
-    actor_state = torch.load(os.path.join(args.action_token_ckpt, "actor.pt"),
-                             map_location=device)
-    actor.load_state_dict(actor_state)
-    actor.eval()
-    for p in actor.parameters():
-        p.requires_grad_(False)
+        print(f"Loading actor from {args.action_token_ckpt}/actor.pt")
+        actor = ActionTokenActor(
+            bottleneck_dim=args.bottleneck_dim,
+            action_dim=action_dim,
+            chunk_len=chunk_len,
+            hidden_dim=args.actor_hidden_dim,
+            ref_dropout=args.ref_dropout,
+            fixed_std=args.fixed_std,
+            prop_dim=args.prop_dim,
+            residual=args.residual,
+        ).to(device)
+        actor_state = torch.load(os.path.join(args.action_token_ckpt, "actor.pt"),
+                                 map_location=device)
+        actor.load_state_dict(actor_state)
+        actor.eval()
+        for p in actor.parameters():
+            p.requires_grad_(False)
 
     suite_info = get_suite_info(args.suite,
                                 libero_python=os.environ.get("LIBERO_PYTHON"))
@@ -161,6 +186,7 @@ def main():
                 device=device,
                 rank=tid,
                 video_dir=video_dir_t,
+                base_vla_only=args.base_vla,
             )
             futures[fut] = tid
         for fut in as_completed(futures):
@@ -187,6 +213,7 @@ def main():
         os.makedirs(os.path.dirname(args.results_json) or ".", exist_ok=True)
         payload = {
             "action_token_ckpt": args.action_token_ckpt,
+            "base_vla": bool(args.base_vla),
             "vla_ckpt": args.vla_ckpt,
             "suite": args.suite,
             "n_eps_per_task": args.n_eps_per_task,

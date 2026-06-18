@@ -13,6 +13,7 @@ from collections import defaultdict
 from typing import List, Tuple
 
 import torch
+import torch.distributed as dist
 
 from AlphaBrain.training.reinforcement_learning.algos.VLAPPO.vla_policy import (
     VLAPolicy,
@@ -31,28 +32,44 @@ def vla_grpo_loss(
     kl_coef: float = 0.04,
     micro_batch: int = 2,
     device: str = "cuda",
-) -> Tuple[torch.Tensor, dict]:
-    """Compute GRPO loss summed over all transitions in the rollout.
+) -> dict:
+    """Compute GRPO loss over all transitions and backward() per micro-batch.
 
-    Returns: (loss, stats). loss is a scalar tensor with grad on the
-    current policy's VLA parameters.
+    Mirrors vla_ppo_loss: the caller owns optimizer.zero_grad() (before) and
+    grad-clip + optimizer.step() (after); this fn does the backward internally
+    in FSDP lockstep. Returns a stats dict only (no loss tensor).
     """
     # ── 1. Group-relative episode-level advantages ───────────────────
+    # Group key is (task_id, state_idx): the merged multi-task collector
+    # flattens all tasks into one episode list, and state_idx only runs 0..49
+    # PER TASK, so grouping by state_idx alone would mix episodes of the same
+    # init-state index across DIFFERENT tasks → contaminated group baseline.
     groups = defaultdict(list)
     for ep_idx, ep in enumerate(episodes):
-        groups[ep.state_idx].append((ep_idx, ep))
+        groups[(ep.task_id, ep.state_idx)].append((ep_idx, ep))
 
+    # Success-rate dynamic filter (DAPO/RLinf): a group whose episodes are all
+    # success or all failure has σ=0 → zero learning signal. We drop it: its
+    # advantages stay 0 AND its transitions are excluded from the loss entirely
+    # (no wasted forward passes on uninformative samples).
     ep_advantages = [0.0] * len(episodes)
-    for _state_idx, group in groups.items():
+    ep_has_signal = [False] * len(episodes)
+    n_groups_with_signal = 0
+    for _key, group in groups.items():
         rewards = [ep.reward for _, ep in group]
         if len(rewards) < 2:
             continue  # single-ep group → no relative signal
+        if len(set(rewards)) < 2:
+            continue  # all-success or all-fail → σ=0, drop the group
+        n_groups_with_signal += 1
         mu = sum(rewards) / len(rewards)
         sigma = max((sum((r - mu) ** 2 for r in rewards) / len(rewards)) ** 0.5, 1e-8)
         for (ep_idx, ep) in group:
             ep_advantages[ep_idx] = (ep.reward - mu) / sigma
+            ep_has_signal[ep_idx] = True
 
     # ── 2. Flatten transitions; broadcast ep adv to each of its steps ──
+    # Skip episodes in dropped (zero-signal) groups.
     flat_images: List = []
     flat_instrs: List[str] = []
     flat_actions: List[torch.Tensor] = []
@@ -60,6 +77,8 @@ def vla_grpo_loss(
     flat_advantages: List[float] = []
 
     for ep_idx, ep in enumerate(episodes):
+        if not ep_has_signal[ep_idx]:
+            continue
         adv = ep_advantages[ep_idx]
         for t in range(ep.finish_step):
             sr = ep.step_records[t]
@@ -70,33 +89,61 @@ def vla_grpo_loss(
             flat_advantages.append(adv)
 
     N = len(flat_actions)
-    if N == 0:
-        return torch.tensor(0.0, device=device, requires_grad=True), {"n_steps": 0}
+    empty = {"loss": 0.0, "pg_loss": 0.0, "kl": 0.0, "ratio_mean": 1.0, "clip_frac": 0.0,
+             "advantage_mean": 0.0, "advantage_std": 0.0, "n_groups": len(groups),
+             "n_groups_with_signal": n_groups_with_signal,
+             "n_steps": 0, "n_batches": 0}
+    # Distributed FSDP lockstep (mirrors vla_ppo_loss): every rank must fire the
+    # SAME sequence of FSDP collectives or NCCL deadlocks. (1) all-reduce
+    # MIN(has_data): if ANY rank collected nothing, all bail together. (2)
+    # all-reduce MAX(n_batches): every rank loops n_batches_global times; padding
+    # iters re-process the last real micro-batch with loss×0 (no grad, but FSDP
+    # all-gather/reduce-scatter still fire in lockstep). Per-micro-batch backward
+    # (not one big graph) keeps peak memory O(micro_batch).
+    if dist.is_initialized():
+        _ht = torch.tensor([1 if N > 0 else 0], device=device, dtype=torch.int64)
+        dist.all_reduce(_ht, op=dist.ReduceOp.MIN)
+        if int(_ht.item()) == 0:
+            return empty
+    elif N == 0:
+        return empty
 
     actions_t = torch.stack(flat_actions).to(device)
     old_lp_t = torch.tensor(flat_old_lp, device=device, dtype=torch.float32)
     adv_t = torch.tensor(flat_advantages, device=device, dtype=torch.float32)
 
-    # ── 3. Mini-batched re-forward (current + ref VLA) ───────────────
-    total_pg = torch.tensor(0.0, device=device)
-    total_kl = torch.tensor(0.0, device=device)
-    n_batches = 0
+    n_batches_local = (N + micro_batch - 1) // micro_batch
+    if dist.is_initialized():
+        _t = torch.tensor([n_batches_local], device=device, dtype=torch.int64)
+        dist.all_reduce(_t, op=dist.ReduceOp.MAX)
+        n_batches_global = int(_t.item())
+    else:
+        n_batches_global = n_batches_local
+    inv_real = 1.0 / max(n_batches_local, 1)
+    last_real_start = max(0, (n_batches_local - 1) * micro_batch)
+
+    # ── 3. Mini-batched re-forward (current + ref VLA), backward per micro-batch
+    sum_pg = 0.0
+    sum_kl = 0.0
     sum_ratio = 0.0
     sum_clip = 0.0
 
-    for start in range(0, N, micro_batch):
-        end = min(start + micro_batch, N)
+    for i_mb in range(n_batches_global):
+        is_real = i_mb < n_batches_local
+        if is_real:
+            start = i_mb * micro_batch
+            end = min(start + micro_batch, N)
+        else:
+            start = last_real_start
+            end = N
         idx = list(range(start, end))
 
-        batch_images = [flat_images[i] for i in idx]
-        batch_instrs = [flat_instrs[i] for i in idx]
+        batch_images = [flat_images[j] for j in idx]
+        batch_instrs = [flat_instrs[j] for j in idx]
         batch_actions = actions_t[start:end]
 
-        # current policy (with grad)
         new_mean = policy.forward_mean(batch_images, batch_instrs)
         new_lp = policy.log_prob_of_with_mean(new_mean, batch_actions)
-
-        # reference policy (no grad)
         with torch.no_grad():
             ref_mean = ref_policy.forward_mean(batch_images, batch_instrs)
             ref_lp = ref_policy.log_prob_of_with_mean(ref_mean, batch_actions)
@@ -108,32 +155,30 @@ def vla_grpo_loss(
         surr1 = ratio * adv_b
         surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv_b
         pg = -torch.min(surr1, surr2).mean()
-
-        # KL(π || π_ref) via k3 estimator: exp(ref - new) - (ref - new) - 1
         log_ratio_ref = ref_lp - new_lp
         kl = (torch.exp(log_ratio_ref) - log_ratio_ref - 1.0).mean()
 
-        total_pg = total_pg + pg
-        total_kl = total_kl + kl
-        n_batches += 1
-        sum_ratio += float(ratio.mean().detach().item())
-        sum_clip += float(((ratio - 1.0).abs() > clip_eps).float().mean().detach().item())
+        scale = inv_real if is_real else 0.0   # padding iters contribute 0 grad
+        loss_mb = (pg + kl_coef * kl) * scale
+        loss_mb.backward()
 
-    pg_loss = total_pg / max(n_batches, 1)
-    kl_loss = total_kl / max(n_batches, 1)
-    loss = pg_loss + kl_coef * kl_loss
+        if is_real:
+            sum_pg += float(pg.detach().item())
+            sum_kl += float(kl.detach().item())
+            sum_ratio += float(ratio.mean().detach().item())
+            sum_clip += float(((ratio - 1.0).abs() > clip_eps).float().mean().detach().item())
 
-    stats = {
-        "loss": loss.item(),
-        "pg_loss": pg_loss.item(),
-        "kl": kl_loss.item(),
-        "ratio_mean": sum_ratio / max(n_batches, 1),
-        "clip_frac": sum_clip / max(n_batches, 1),
+    nb = n_batches_local
+    return {
+        "loss": sum_pg / nb + kl_coef * sum_kl / nb,
+        "pg_loss": sum_pg / nb,
+        "kl": sum_kl / nb,
+        "ratio_mean": sum_ratio / nb,
+        "clip_frac": sum_clip / nb,
         "advantage_mean": float(adv_t.mean().item()),
         "advantage_std": float(adv_t.std().item()) if adv_t.numel() > 1 else 0.0,
         "n_groups": len(groups),
-        "n_groups_with_signal": sum(1 for _s, g in groups.items() if len(g) >= 2),
+        "n_groups_with_signal": n_groups_with_signal,
         "n_steps": N,
-        "n_batches": n_batches,
+        "n_batches": nb,
     }
-    return loss, stats

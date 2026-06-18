@@ -21,7 +21,7 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 VLA_CKPT="results/training/QwenOFT-5traj-libero_goal/final_model"
 RUN_DIR=${1:-"results/rlt_training_TD3/rlt_5traj_alltasks_v3_release_0414_1727/rl_offpolicy"}
 
-ITER="iter_00400"
+ITER="${ITER:-iter_00400}"
 GPU_IDS=${2:-"0,1,2"}
 # ─────────────────────────────────────────────────────────────
 
@@ -40,9 +40,11 @@ TASKS_B="4,5,6"     # 3 tasks
 TASKS_C="7,8,9"     # 3 tasks
 
 N_EPS=50
-NUM_WORKERS=4
+NUM_WORKERS="${NUM_WORKERS:-4}"
 SUITE=libero_goal
-ARCH_ARGS="--bottleneck_dim 256 --encoder_layers 2 --encoder_heads 4 --actor_hidden_dim 512 --ref_dropout 0.5 --fixed_std 0.1 --prop_dim 8"
+# prop_dim: TD3 (off-policy) trained with 8; GRPO/PPO (on-policy) with 0.
+# RESIDUAL: GRPO/PPO actors predict a residual (set RESIDUAL=1); TD3 does not.
+ARCH_ARGS="--bottleneck_dim ${BOTTLENECK_DIM:-256} --encoder_layers 2 --encoder_heads 4 --actor_hidden_dim 512 --ref_dropout 0.5 --fixed_std 0.1 --prop_dim ${PROP_DIM:-8} ${RESIDUAL:+--residual}"
 
 if [ ! -d "${ACTION_TOKEN_CKPT}" ]; then
     echo "ERROR: RLT_a ckpt not found: ${ACTION_TOKEN_CKPT}" >&2
@@ -77,8 +79,10 @@ _cleanup () {
     done
     # Kill log-mirror tails (pipeline subshells).
     [ "${#TAIL_PIDS[@]}" -gt 0 ] && kill "${TAIL_PIDS[@]}" 2>/dev/null || true
-    # Belt-and-suspenders: kill any orphaned libero_env_worker owned by us.
-    pkill -TERM -u "$(id -u)" -f "AlphaBrain/training/reinforcement_learning/envs/libero_env_worker" 2>/dev/null || true
+    # NOTE: do NOT pkill -f libero_env_worker here — it is uid-wide and would
+    # kill the workers of OTHER concurrent libero jobs (training + other evals),
+    # cascading them all to "worker exited unexpectedly". The per-shard
+    # kill -- -PGID above already reaps this script's own workers.
 }
 trap _cleanup EXIT INT TERM
 

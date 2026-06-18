@@ -11,6 +11,11 @@ from AlphaBrain.training.reinforcement_learning.algos.RLT_a.action_token_encoder
 
 logger = logging.getLogger(__name__)
 
+# success_once: when EVAL_SUCCESS_ONCE=1, an episode counts as success if reward>0.5
+# at ANY step (RLinf / LIBERO convention), not only at termination. Lets us compare
+# our SR to RLinf's success_once numbers on the same checkpoints. Default off (0).
+_SUCCESS_ONCE = os.environ.get("EVAL_SUCCESS_ONCE", "0") == "1"
+
 
 @torch.no_grad()
 def _eval_deterministic_local(
@@ -28,8 +33,15 @@ def _eval_deterministic_local(
     device: str,
     rank: int = 0,
     video_dir=None,
+    base_vla_only: bool = False,
 ) -> list:
-    """Run eval episodes assigned to this rank. Returns list of (ep_idx, state_idx, success)."""
+    """Run eval episodes assigned to this rank. Returns list of (ep_idx, state_idx, success).
+
+    When ``base_vla_only`` is True, the frozen VLA's own predicted action chunk
+    is executed directly and the encoder/actor are skipped entirely (they may be
+    None). This yields the pure-base-VLA anchor under the exact RL eval protocol
+    (same env wrapper / seed / max_steps), used by experiment T1.
+    """
     from AlphaBrain.training.reinforcement_learning.envs.libero_env import LiberoEnv
     from AlphaBrain.training.reinforcement_learning.common.rollout import (
         DUMMY_ACTION,
@@ -39,8 +51,9 @@ def _eval_deterministic_local(
     )
 
     frozen_vla.eval()
-    encoder.eval()
-    actor.eval()
+    if not base_vla_only:
+        encoder.eval()
+        actor.eval()
 
     n_eps_total = len(episode_indices)
     # Print a progress line every ~20% of the chunk (min 1 ep).
@@ -79,15 +92,19 @@ def _eval_deterministic_local(
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         action_queries, vla_actions = frozen_vla.get_vla_action(
                             batch_images=images, instructions=[task_desc])
-                    rl_token = encoder.encode(action_queries)
-                    # Slice VLA actions to match actor's chunk_len (VLA may output longer chunks)
+                    # Slice VLA actions to match chunk_len (VLA may output longer chunks)
                     if vla_actions.size(1) > chunk_len:
                         vla_actions = vla_actions[:, :chunk_len, :]
-                    prop_state = torch.tensor(
-                        np.array(obs["state"], dtype=np.float32)
-                    ).unsqueeze(0).to(device)
-                    action_t, _ = actor(rl_token, vla_actions, prop_state, deterministic=True)
-                    action_np = action_t[0].cpu().numpy()
+                    if base_vla_only:
+                        # Pure base-VLA anchor: execute the VLA's own action chunk.
+                        action_np = vla_actions[0].float().cpu().numpy()
+                    else:
+                        rl_token = encoder.encode(action_queries)
+                        prop_state = torch.tensor(
+                            np.array(obs["state"], dtype=np.float32)
+                        ).unsqueeze(0).to(device)
+                        action_t, _ = actor(rl_token, vla_actions, prop_state, deterministic=True)
+                        action_np = action_t[0].cpu().numpy()
                     action_cache = _unnormalize(action_np, action_norm_stats)
                     cache_idx = 0
 
@@ -97,8 +114,14 @@ def _eval_deterministic_local(
                 env_step += 1
                 if frames is not None:
                     frames.append(obs["primary_image"].copy())
+                # success_once (EVAL_SUCCESS_ONCE=1, RLinf-style): succeeded if reward>0.5
+                # at ANY step. Default: success judged only at episode termination.
+                if _SUCCESS_ONCE and reward > 0.5:
+                    success = True
+                    break
                 if done:
-                    success = bool(reward > 0.5)
+                    if not _SUCCESS_ONCE:
+                        success = bool(reward > 0.5)
                     break
 
             results.append((ep_idx, state_idx, success))
@@ -119,6 +142,15 @@ def _eval_deterministic_local(
                       f"  running SR={running_sr:.2%}  (last ep {ep_idx} "
                       f"{'SUCCESS' if success else 'fail'})",
                       flush=True)
+        except (RuntimeError, TimeoutError, ConnectionError, BrokenPipeError) as e:
+            # Env worker timed out (CPU oversubscription) and pool retries were
+            # exhausted. SKIP this episode rather than aborting the whole eval —
+            # excluded from the denominator (SR = n_success / len(results)) so an
+            # infra failure isn't charged to the policy. Offline eval on an
+            # unloaded box never hits this; in-train eval degrades gracefully.
+            print(f"  [eval] task {task_id} rank {rank}: ep {ep_idx} SKIPPED "
+                  f"(env failure: {e})", flush=True)
+            continue
         finally:
             env.close()
 

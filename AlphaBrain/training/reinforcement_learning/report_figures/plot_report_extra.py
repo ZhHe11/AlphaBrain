@@ -17,16 +17,19 @@ ALGO_C = {"TD3": "#143C5C", "PPO": "#5DBB46", "GRPO": "#E8A33D", "base": "#9CA3A
 def fig_main_bar():
     """All-task (10-task) SR per method, grouped; error bars where n>=2."""
     # (label, algo, mean, std_or_None)
+    # point estimates (match tab:rlt_main); std lives only in the convergence
+    # curve, so no error bars here.
     rows = [
         ("Base VLA", "base", 0.704, None),
-        ("RLT+TD3", "TD3", 0.810, 0.020),
-        ("RLT+GRPO", "GRPO", 0.786, 0.048),
-        ("RLT+PPO", "PPO", 0.953, 0.027),
-        ("RLT$_a$+TD3", "TD3", 0.874, None),
-        ("RLT$_a$+GRPO", "GRPO", 0.753, 0.035),
-        ("RLT$_a$+PPO", "PPO", 0.951, 0.010),
-        ("VLA+PPO", "VLA", 0.718, None),
-        ("VLA+GRPO", "VLA", 0.756, None),
+        ("RLT+TD3", "TD3", 0.830, None),
+        ("RLT+GRPO", "GRPO", 0.786, None),
+        ("RLT+PPO", "PPO", 0.953, None),
+        ("RLT$_a$+TD3", "TD3", 0.920, None),
+        ("RLT$_a$+GRPO", "GRPO", 0.753, None),
+        ("RLT$_a$+PPO", "PPO", 0.951, None),
+        ("VLA+PPO\n(small)", "VLA", 0.718, None),
+        ("VLA+GRPO\n(small)", "VLA", 0.756, None),
+        ("VLA+PPO\n(scaled)", "VLA", 0.922, None),
     ]
     fig, ax = plt.subplots(figsize=(9.0, 4.6))
     xs = range(len(rows))

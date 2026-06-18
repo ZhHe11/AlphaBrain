@@ -30,41 +30,42 @@ C_TBD   = "0.82"      # placeholder grey
 # DATA — fill in as experiments complete.  None  ==  not measured yet.
 # ─────────────────────────────────────────────────────────────────────
 
-# Base VLA (pre-RL) — per-task SR.  source: results/evaluation/libero_goal/*/results.json
-# NOTE: provisional — these existing evals use a slightly different protocol
-# from the RL eval (1traj: seed42/max_steps512/steps_10000; 5traj:
-# seed0/max_steps320/steps_20000). A clean re-eval (T1) supersedes them.
-BASE_VLA_5TRAJ = {0: 0.52, 1: 0.92, 2: 0.96, 3: 0.50, 4: 0.82,
-                  5: 0.44, 6: 0.34, 7: 0.94, 8: 0.88, 9: 0.54}   # overall 0.686
-BASE_VLA_1TRAJ = {0: 0.32, 1: 0.82, 2: 0.02, 3: 0.22, 4: 0.70,
-                  5: 0.12, 6: 0.10, 7: 0.88, 8: 0.06, 9: 0.02}   # overall 0.326
+# Base VLA (pre-RL) — per-task SR. T1 clean re-eval (offline 50-ep, seed42,
+# max_steps320, final_model). source: RL_REPORT_TABLES.md 表 1b-①.
+BASE_VLA_5TRAJ = {0: 0.78, 1: 0.92, 2: 0.98, 3: 0.42, 4: 0.84,
+                  5: 0.34, 6: 0.34, 7: 1.00, 8: 0.90, 9: 0.52}   # overall 0.704
+BASE_VLA_1TRAJ = {0: 0.96, 1: 0.96, 2: 0.18, 3: 0.06, 4: 0.96,
+                  5: 0.04, 6: 0.38, 7: 1.00, 8: 0.92, 9: 0.02}   # 1traj_alltasks_v3 (RL after); base 1traj overall 0.346
 
-# RLT + TD3 — per-task offline eval SR (50-ep).
-# source: results/eval_rlt_release_0415/summary.json
+# RLT_a + TD3 release — per-task offline eval SR (50-ep). source: 表 1b-①.
 RLT_TD3_1TRAJ = {0: 0.86, 1: 0.96, 3: 0.08}          # QwenOFT-1traj, single-task runs
-RLT_TD3_5TRAJ = {0: 1.00, 1: 1.00, 2: 0.94, 3: 0.68,  # QwenOFT-5traj, all-10-task run
+RLT_TD3_5TRAJ = {0: 1.00, 1: 1.00, 2: 0.94, 3: 0.68,  # RLT_a+TD3 release, all-10-task
                  4: 1.00, 5: 0.86, 6: 0.80, 7: 1.00,
                  8: 1.00, 9: 0.92}                     # overall 0.92
 
+# Pi0.5-5traj multitask RLT+TD3 — per-task (0606). source: 表 4. overall 0.868
+PI05_TD3_5TRAJ = {0: 0.94, 1: 1.00, 2: 0.94, 3: 0.48, 4: 1.00,
+                  5: 0.96, 6: 0.78, 7: 0.96, 8: 0.98, 9: 0.64}   # overall 0.868
+
 # RLT + TD3 — online SR training curve, libero_goal task 0 (20-ep in-loop eval).
-# source: results/eval_rlt_release_0415/woshare_t0_iters/summary.json
 RLT_TD3_T0_CURVE = {25: 0.36,  50: 0.26,  75: 0.58, 100: 0.48,
                     125: 0.64, 150: 0.84, 175: 0.86, 200: 0.84,
                     225: 0.74, 250: 0.84, 275: 0.74, 300: 0.92}
-# Placeholders — fill once the runs unlocked this session finish.
-RLT_GRPO_T0_CURVE = {}   # RLT + GRPO  (code unlocked; run pending)
-RLT_PPO_T0_CURVE  = {}   # RLT + PPO   (pending E2)
+RLT_GRPO_T0_CURVE = {}
+RLT_PPO_T0_CURVE  = {}
 
-# Headline SR per method on libero_goal (overall, QwenOFT).  None = TBD.
-# RLT+TD3 cell uses the 5-traj all-10-task overall (0.92).
+# Headline SR per method on libero_goal 全10任务 (overall, QwenOFT-5traj,
+# 离线 50-ep, iter300). source: RL_REPORT_TABLES.md 表 1.
 MAIN_RESULTS = {
-    "Base VLA\n(pre-RL)":     0.686,  # QwenOFT-5traj base, libero_goal (provisional, see note above)
-    "RLT + TD3":              0.92,
-    "RLT + GRPO":             None,   # unlocked this session — run pending
-    "RLT + PPO":              None,   # pending E2 (small-actor PPO)
-    "RLT_a + TD3":            None,
-    "VLA + PPO\n(baseline)":  None,   # pending E3 (run to convergence)
-    "VLA + GRPO\n(baseline)": None,   # pending E3
+    "Base VLA\n(pre-RL)":     0.704,
+    "RLT + TD3":              0.830,
+    "RLT + GRPO":             0.720,
+    "RLT + PPO":              0.916,
+    "RLT_a + TD3":            0.920,
+    "RLT_a + GRPO":           0.704,
+    "RLT_a + PPO":            0.936,
+    "VLA + PPO\n(baseline)":  0.718,
+    "VLA + GRPO\n(baseline)": 0.756,
 }
 
 
@@ -75,7 +76,15 @@ MAIN_RESULTS = {
 def fig_main_results():
     """Bar — SR by method. Known cells solid; unknown drawn as hatched TBD."""
     methods = list(MAIN_RESULTS)
-    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    # colour by family: base=grey, RLT=blue, RLT_a=green, VLA baseline=orange
+    def _fam_color(m):
+        if "Base" in m: return "0.55"
+        if m.startswith("RLT_a"): return C_PPO
+        if m.startswith("RLT"):   return C_TD3
+        return C_GRPO            # VLA baselines
+    best = max((m for m in methods if MAIN_RESULTS[m] is not None),
+               key=lambda m: MAIN_RESULTS[m])
+    fig, ax = plt.subplots(figsize=(10.5, 4.8))
     for i, m in enumerate(methods):
         v = MAIN_RESULTS[m]
         if v is None:
@@ -83,14 +92,18 @@ def fig_main_results():
             ax.text(i, 0.50, "TBD", ha="center", va="center",
                     fontsize=10, color="0.35", rotation=90)
         else:
-            ax.bar(i, v, color=C_TD3)
-            ax.text(i, v + 0.02, f"{v:.2f}", ha="center", va="bottom", fontsize=10)
+            ax.bar(i, v, color=_fam_color(m),
+                   edgecolor=("gold" if m == best else "none"),
+                   lw=(2.5 if m == best else 0))
+            ax.text(i, v + 0.02, f"{v:.3f}" + ("  *" if m == best else ""),
+                    ha="center", va="bottom", fontsize=9,
+                    fontweight=("bold" if m == best else "normal"))
     ax.set_xticks(range(len(methods)))
     ax.set_xticklabels(methods, fontsize=9)
     ax.set_ylim(0, 1.10)
-    ax.set_ylabel("Success rate")
-    ax.set_title("Main results — success rate by method on libero_goal\n"
-                 "(QwenOFT; RLT+TD3 cell = 5-traj all-task overall)", fontsize=11)
+    ax.set_ylabel("Success rate (all-10-task, offline 50-ep)")
+    ax.set_title("Main results — all-task overall SR by method (QwenOFT-5traj, libero_goal)\n"
+                 "grey=base, blue=RLT, green=RLT_a, orange=VLA-baseline, star=best", fontsize=11)
     ax.grid(axis="y", ls=":", alpha=0.5)
     fig.tight_layout()
     out = os.path.join(HERE, "fig1_main_results.png")

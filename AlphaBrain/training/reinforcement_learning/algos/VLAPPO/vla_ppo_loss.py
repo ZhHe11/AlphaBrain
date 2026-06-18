@@ -2,11 +2,18 @@
 
 Key cost driver: each PPO epoch must re-forward the VLA over every
 transition in the rollout (because the policy IS the VLA). We mini-batch
-to keep peak memory bounded; the trainer chooses the mini-batch size.
+to keep peak memory bounded.
+
+Gradient accumulation: each micro-batch re-forwards the VLA, computes its
+share of the loss, and immediately ``backward()``s — so only ONE
+micro-batch's autograd graph is alive at a time. Peak memory is
+O(micro_batch), independent of how many episodes were collected (this is
+what lets G scale to RLinf-style values without OOM).
 """
 from typing import List, Tuple
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from AlphaBrain.training.reinforcement_learning.algos.VLAPPO.vla_policy import (
@@ -58,14 +65,17 @@ def vla_ppo_loss(
     vf_coef: float = 0.5,
     micro_batch: int = 4,
     device: str = "cuda",
-) -> Tuple[torch.Tensor, dict]:
-    """Compute PPO loss summed over all transitions in the rollout.
+) -> dict:
+    """Compute the PPO loss over all transitions and run ``backward()``.
 
-    Each transition is re-forwarded through the VLA (in mini-batches of
-    `micro_batch`) so new_log_prob and new_value have gradient. The
-    summed loss is returned; the trainer does .backward() once.
+    Each transition is re-forwarded through the VLA in mini-batches of
+    ``micro_batch``. Every micro-batch is backward'd immediately, so its
+    autograd graph is freed before the next — peak memory does not grow
+    with the number of episodes.
 
-    Returns: (loss, stats). loss is a scalar tensor with grad.
+    The caller owns ``optimizer.zero_grad()`` (before) and grad-clip +
+    ``optimizer.step()`` (after). Returns a stats dict only — no loss
+    tensor (the backward has already happened).
     """
     # ── 1. Flatten transitions + compute GAE per episode ─────────────
     flat_images: List = []
@@ -91,8 +101,22 @@ def vla_ppo_loss(
             flat_returns.append(ret[t])
 
     N = len(flat_actions)
-    if N == 0:
-        return torch.tensor(0.0, device=device, requires_grad=True), {"n_steps": 0}
+    empty = {"loss": 0.0, "pg_loss": 0.0, "vf_loss": 0.0, "ratio_mean": 1.0,
+             "clip_frac": 0.0, "advantage_mean": 0.0, "return_mean": 0.0,
+             "n_steps": 0, "n_batches": 0}
+    # Distributed: every rank must take the same path (return-empty vs run-loop)
+    # or FSDP collectives go out of sync. All-reduce MIN(has_data): if ANY
+    # rank failed to collect anything, everyone skips this update — that
+    # rank can't supply local data to pad FSDP collectives, so the only
+    # safe action is for all ranks to bail in lockstep.
+    if dist.is_initialized():
+        _ht = torch.tensor([1 if N > 0 else 0], device=device, dtype=torch.int64)
+        dist.all_reduce(_ht, op=dist.ReduceOp.MIN)
+        all_have_data = (int(_ht.item()) == 1)
+    else:
+        all_have_data = (N > 0)
+    if not all_have_data:
+        return empty
 
     actions_t = torch.stack(flat_actions).to(device)             # (N, C, A)
     old_lp_t = torch.tensor(flat_old_lp, device=device, dtype=torch.float32)
@@ -104,19 +128,47 @@ def vla_ppo_loss(
     if adv_t.numel() > 1:
         adv_t = (adv_t - adv_t.mean()) / (adv_t.std() + 1e-8)
 
-    # ── 2. Mini-batched VLA re-forward + per-batch loss accumulation ─
-    total_pg = torch.tensor(0.0, device=device)
-    total_vf = torch.tensor(0.0, device=device)
-    n_batches = 0
+    n_batches_local = (N + micro_batch - 1) // micro_batch
+
+    # FSDP-aware: each rank must fire the SAME sequence of FSDP collectives.
+    # Variable N (episode lengths differ across ranks) → fast ranks otherwise
+    # finish early and call `_allreduce_unwrapped_grads` while slow ranks are
+    # still mid-FSDP → NCCL deadlocks on call-order mismatch (this is exactly
+    # what RLinf avoids by redistributing rollout data to a fixed per-rank
+    # global batch). Fix: all-reduce MAX → every rank loops n_batches_global
+    # times; extra iters re-process the last real micro-batch with loss × 0
+    # (zero gradient contribution, but FSDP all-gather/reduce-scatter still
+    # fire in lockstep).
+    if dist.is_initialized():
+        _t = torch.tensor([n_batches_local], device=device, dtype=torch.int64)
+        dist.all_reduce(_t, op=dist.ReduceOp.MAX)
+        n_batches_global = int(_t.item())
+    else:
+        n_batches_global = n_batches_local
+
+    inv_real = 1.0 / max(n_batches_local, 1)
+    last_real_start = max(0, (n_batches_local - 1) * micro_batch)
+
+    # ── 2. Mini-batched VLA re-forward — backward per micro-batch ────
+    sum_pg = 0.0
+    sum_vf = 0.0
     sum_ratio = 0.0
     sum_clip = 0.0
 
-    for start in range(0, N, micro_batch):
-        end = min(start + micro_batch, N)
+    for i_mb in range(n_batches_global):
+        is_real = i_mb < n_batches_local
+        if is_real:
+            start = i_mb * micro_batch
+            end = min(start + micro_batch, N)
+        else:
+            # Padding: reuse the last real micro-batch — loss × 0 → no grad
+            # contribution; FSDP collectives still fire to keep lockstep.
+            start = last_real_start
+            end = N
         idx = list(range(start, end))
 
-        batch_images = [flat_images[i] for i in idx]
-        batch_instrs = [flat_instrs[i] for i in idx]
+        batch_images = [flat_images[j] for j in idx]
+        batch_instrs = [flat_instrs[j] for j in idx]
         batch_actions = actions_t[start:end]
 
         # VLA re-forward (with grad)
@@ -138,25 +190,29 @@ def vla_ppo_loss(
         v_clipped = old_v_b + torch.clamp(new_value - old_v_b, -10.0, 10.0)
         vf = torch.max((new_value - ret_b) ** 2, (v_clipped - ret_b) ** 2).mean()
 
-        total_pg = total_pg + pg
-        total_vf = total_vf + vf
-        n_batches += 1
-        sum_ratio += float(ratio.mean().detach().item())
-        sum_clip += float(((ratio - 1.0).abs() > clip_eps).float().mean().detach().item())
+        # Real iters average over n_batches_local; padding iters contribute 0.
+        scale = inv_real if is_real else 0.0
+        loss_mb = (pg + vf_coef * vf) * scale
+        loss_mb.backward()
 
-    pg_loss = total_pg / max(n_batches, 1)
-    vf_loss = total_vf / max(n_batches, 1)
-    loss = pg_loss + vf_coef * vf_loss
+        if is_real:
+            sum_pg += float(pg.detach().item())
+            sum_vf += float(vf.detach().item())
+            sum_ratio += float(ratio.mean().detach().item())
+            sum_clip += float(((ratio - 1.0).abs() > clip_eps).float().mean().detach().item())
 
-    stats = {
-        "loss": loss.item(),
-        "pg_loss": pg_loss.item(),
-        "vf_loss": vf_loss.item(),
-        "ratio_mean": sum_ratio / max(n_batches, 1),
-        "clip_frac": sum_clip / max(n_batches, 1),
+    n_batches = n_batches_local  # local count for stats — trainer aggregates
+
+    pg_loss = sum_pg / n_batches
+    vf_loss = sum_vf / n_batches
+    return {
+        "loss": pg_loss + vf_coef * vf_loss,
+        "pg_loss": pg_loss,
+        "vf_loss": vf_loss,
+        "ratio_mean": sum_ratio / n_batches,
+        "clip_frac": sum_clip / n_batches,
         "advantage_mean": float(adv_t.mean().item()),
         "return_mean": float(ret_t.mean().item()),
         "n_steps": N,
         "n_batches": n_batches,
     }
-    return loss, stats

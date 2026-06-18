@@ -39,12 +39,14 @@ class ActionTokenActor(nn.Module):
         ref_dropout: float = 0.5,  # paper: 50%
         fixed_std: float = 0.1,    # paper: small fixed std
         prop_dim: int = 0,         # proprioceptive state dim (paper: eef_pos+axisangle+gripper=8)
+        residual: bool = False,    # if True: μ = ã + net(...) — actor edits the VLA action
     ):
         super().__init__()
         self.action_dim = action_dim
         self.chunk_len = chunk_len
         self.ref_dropout = ref_dropout
         self.prop_dim = prop_dim
+        self.residual = residual
 
         flat_action_dim = action_dim * chunk_len
         input_dim = bottleneck_dim + prop_dim + flat_action_dim
@@ -103,8 +105,15 @@ class ActionTokenActor(nn.Module):
         else:
             x = torch.cat([rl_feat, vla_flat_input], dim=-1)
 
-        raw_output = self.net(x)  # (B, C*A)
-        return raw_output.reshape(B, self.chunk_len, self.action_dim)
+        raw_output = self.net(x).reshape(B, self.chunk_len, self.action_dim)
+        if self.residual:
+            # μ = ã + Δ. The output head is near-zero-init, so a fresh actor
+            # is an exact VLA pass-through (μ ≈ ã) → it rolls out at the VLA
+            # baseline SR from iteration 1. Removes the on-policy cold-start:
+            # a fresh non-residual actor outputs ≈0 → SR 0 → sparse reward
+            # gives no gradient → GRPO/PPO never bootstraps.
+            return raw_output + vla_action
+        return raw_output
 
     def forward(
         self,

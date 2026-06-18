@@ -109,7 +109,7 @@ case "${TRACK}" in
             --output_dir "${OUTPUT_DIR}" \
             --suite libero_goal \
             --all_tasks \
-            --bottleneck_dim 256 \
+            --bottleneck_dim ${BOTTLENECK_DIM:-256} \
             --encoder_layers 2 \
             --encoder_heads 4 \
             --pretrain_n_obs 3000 \
