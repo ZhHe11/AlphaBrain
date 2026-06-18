@@ -84,3 +84,24 @@
 - **不宜再主张**:"RLT 在 SR 上优于全量微调"——RLinf 反例在先。
 
 来源:[RLinf-VLA arXiv:2510.06710](https://arxiv.org/html/2510.06710v1) · [RLinf LIBERO docs](https://rlinf.readthedocs.io/en/latest/rst_source/examples/embodied/libero.html)
+
+## DAPO reproduction attempt (2026-06-18) — NEGATIVE RESULT
+
+Implemented 3 of DAPO's 4 pieces in vla_grpo_loss.py (commit 9c20d9a), verified
+active in the running process (clip_eps_high=0.28, dual_clip_c=3.0, success filter,
+fixed_std=0.2, kl=0):
+
+| variant | all-task SR |
+|---|---|
+| base VLA | 0.704 |
+| vanilla GRPO (single-GPU / FSDP-scale / kl0) | 0.740–0.744 |
+| + exploration std=0.2 | ~0.77 |
+| + DAPO clip-higher + dual-clip + filter | 0.740 (iter10–50: .705/.75/.735/.725/.74) |
+| VLA+PPO (same stack) | 0.922 |
+| RLinf DAPO-GRPO (OpenVLA-OFT) | 0.988 |
+
+DAPO clip tricks are INERT on our continuous-action VLA. Root cause isolated: the
+4th DAPO piece, **token-level credit assignment**, is inseparable from a **discrete
+action-token head** (OpenVLA-OFT). QwenOFT uses a continuous fixed-std Gaussian — no
+tokens to credit, and clip-higher has no entropy to preserve (std fixed). The gap to
+RLinf is the action parameterization, not a GRPO hyperparameter or bug.
