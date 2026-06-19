@@ -71,8 +71,10 @@ if [ "${MULTI_TASK}" = "1" ]; then
 else
     TASK_FLAG="--task_id ${TASK_ID}"; RUN_TAG="vla_grpo_qwen_t${TASK_ID}"
 fi
-TIMESTAMP=$(date +%m%d_%H%M)
-OUTPUT_DIR="results/rlt_training/${RUN_TAG}_${TIMESTAMP}/vla_grpo"
+TIMESTAMP=$(date +%m%d_%H%M%S)
+# Include RUN_NAME (when set) in the output dir so two concurrent launches in the
+# same minute can't collide on the same dir (interleaved logs / clobbered ckpts).
+OUTPUT_DIR="results/rlt_training/${RUN_NAME:-${RUN_TAG}}_${TIMESTAMP}/vla_grpo"
 mkdir -p "${OUTPUT_DIR}"
 TRAIN_LOG="${OUTPUT_DIR}/train.log"
 

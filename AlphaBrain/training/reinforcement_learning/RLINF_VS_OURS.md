@@ -105,3 +105,24 @@ DAPO clip tricks are INERT on our continuous-action VLA. Root cause isolated: th
 action-token head** (OpenVLA-OFT). QwenOFT uses a continuous fixed-std Gaussian — no
 tokens to credit, and clip-higher has no entropy to preserve (std fixed). The gap to
 RLinf is the action parameterization, not a GRPO hyperparameter or bug.
+
+### CORRECTION (2026-06-19): the first DAPO test was invalid; properly-powered redo
+
+The 2026-06-18 run used ppo_epochs=1 + lr=1e-5 → policy ratio stayed ~1.0,
+clip_frac ~1.5%, so clip-higher (1.28) / dual-clip NEVER activated. That run did
+NOT test DAPO — the clips were no-ops because nothing reached the bound, not
+because of the action representation.
+
+Valid redo (ppo_epochs=4 so ratios drift; separate output dirs after a same-minute
+collision bug, fixed in run_qwen_vla_grpo.sh):
+| run | clip_frac | det. eval iter10/20/30 |
+|---|---|---|
+| lr=5e-5, 4ep | 0.17–0.23 (clips ENGAGE) | 72 / 75 / 72 |
+| lr=1e-5, 4ep | ~0.015 (still inert, lr too low) | 71.5 / 64.5 / 71.5 |
+
+CONCLUSION (now valid): with clip-higher + dual-clip genuinely firing on ~20% of
+samples, SR stays ~72–75% — NO improvement over vanilla 0.74 / std0.2 0.77. The
+lr=5e-5 run actively HURTS the hard task (t3 0.30→0.10) while easy tasks saturate
+— the coarse episode-level credit's tug-of-war. Clips regulate step SIZE; they
+cannot fix step DIRECTION, which is set by the (coarse) advantage. Confirms the
+limiter is token-level credit (needs discrete action head), not the clip recipe.
