@@ -136,6 +136,13 @@ def parse_args():
     p.add_argument("--dual_clip_c", type=float, default=0.0,
                    help="DAPO dual-clip constant (e.g. 3.0): lower-bound on the "
                         "negative-advantage objective. 0/<=1 = disabled.")
+    p.add_argument("--grpo_token_level", action="store_true",
+                   help="Token-level (per-action-dim) logprob + per-dim clip "
+                        "(RLinf logprob_type=token_level). Default = joint chunk.")
+    p.add_argument("--grpo_temporal_credit", action="store_true",
+                   help="Action-level credit: discount the group-relative episode "
+                        "advantage by gamma^(T-1-t) so credit concentrates on the "
+                        "actions nearest the (sparse) terminal reward.")
     p.add_argument("--vf_coef", type=float, default=0.5)
     p.add_argument("--recon_loss_coef", type=float, default=0.1)
     p.add_argument("--max_grad_norm", type=float, default=1.0)

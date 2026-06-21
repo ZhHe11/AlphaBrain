@@ -35,6 +35,22 @@ def _gaussian_log_prob(action: torch.Tensor, mean: torch.Tensor, std: float) -> 
     return log_p_per_dim.sum(dim=(-2, -1))
 
 
+def _gaussian_log_prob_per_dim(action: torch.Tensor, mean: torch.Tensor, std: float) -> torch.Tensor:
+    """Like _gaussian_log_prob but WITHOUT summing — returns per-component
+    log-probs flattened to (B, chunk_len*action_dim).
+
+    Used for token-level (per-action-dimension) GRPO: each of the
+    chunk_len·action_dim Gaussian components is treated as its own "token",
+    so the importance ratio and clip are applied per-component (mirrors
+    RLinf's logprob_type=token_level for continuous-action OFT). The joint
+    log-prob equals this summed over the last dim.
+    """
+    diff = (action - mean) ** 2
+    log_var = 2.0 * torch.log(torch.as_tensor(std, dtype=action.dtype, device=action.device))
+    log_p_per_dim = -0.5 * (diff / (std ** 2) + _LOG_2PI + log_var)
+    return log_p_per_dim.flatten(start_dim=1)  # (B, chunk_len*action_dim)
+
+
 class VLAPolicy:
     """Thin wrapper around a QwenOFT VLA exposing PPO-friendly hooks.
 
@@ -97,6 +113,12 @@ class VLAPolicy:
         """Compute log π(taken_action | obs) given a pre-computed mean.
         Useful in PPO update where we already re-ran VLA forward."""
         return _gaussian_log_prob(taken_action, action_mean, self.fixed_std)
+
+    def log_prob_per_dim_with_mean(
+        self, action_mean: torch.Tensor, taken_action: torch.Tensor
+    ) -> torch.Tensor:
+        """Per-component (token-level) log π. Returns (B, chunk_len*action_dim)."""
+        return _gaussian_log_prob_per_dim(taken_action, action_mean, self.fixed_std)
 
 
 # ── Free helper (works on any policy that has .forward_mean) ─────────

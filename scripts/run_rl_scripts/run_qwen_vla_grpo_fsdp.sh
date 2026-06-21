@@ -59,6 +59,8 @@ KL_COEF=${KL_COEF:-0.0}
 FIXED_STD=${FIXED_STD:-0.1}
 CLIP_EPS_HIGH=${CLIP_EPS_HIGH:-0.0}   # DAPO clip-higher (e.g. 0.28); 0=symmetric
 DUAL_CLIP_C=${DUAL_CLIP_C:-0.0}       # DAPO dual-clip (e.g. 3.0); 0=disabled
+TOKEN_LEVEL=${TOKEN_LEVEL:-0}        # 1 = per-dim (token-level) logprob+clip
+TEMPORAL_CREDIT=${TEMPORAL_CREDIT:-0}  # 1 = gamma^(T-1-t) action-level credit
 REF_UPD_INT=${REF_UPD_INT:-0}
 MAX_ITER=${MAX_ITER:-4}
 EVAL_INTERVAL=${EVAL_INTERVAL:-4}
@@ -112,6 +114,7 @@ python -m torch.distributed.run --nproc_per_node=${NGPU} --master_port=${MASTER_
     --fixed_std ${FIXED_STD} \
     --ppo_epochs ${PPO_EPOCHS} --micro_batch ${MICRO_BATCH} \
     --clip_eps 0.2 --clip_eps_high ${CLIP_EPS_HIGH} --dual_clip_c ${DUAL_CLIP_C} \
+    $([ "${TOKEN_LEVEL}" = "1" ] && echo --grpo_token_level) $([ "${TEMPORAL_CREDIT}" = "1" ] && echo --grpo_temporal_credit) \
     --grpo_kl_coef ${KL_COEF} \
     --ref_update_interval ${REF_UPD_INT} \
     --gamma 0.99 --gae_lambda 0.95 --max_grad_norm 1.0 \

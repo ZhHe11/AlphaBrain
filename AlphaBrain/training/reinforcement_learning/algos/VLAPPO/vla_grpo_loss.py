@@ -31,6 +31,9 @@ def vla_grpo_loss(
     clip_eps: float = 0.2,
     clip_eps_high: float = 0.0, # DAPO clip-higher: asymmetric upper bound (0=symmetric=clip_eps)
     dual_clip_c: float = 0.0,   # DAPO dual-clip: cap on negative-adv loss (0=disabled; DAPO=3.0)
+    token_level: bool = False,  # per-action-dim logprob + per-dim clip (RLinf logprob_type=token_level)
+    temporal_credit: bool = False,  # action-level credit: discount ep adv by gamma^(T-1-t)
+    gamma: float = 0.99,        # discount for temporal_credit
     kl_coef: float = 0.04,
     micro_batch: int = 2,
     device: str = "cuda",
@@ -76,19 +79,34 @@ def vla_grpo_loss(
     flat_instrs: List[str] = []
     flat_actions: List[torch.Tensor] = []
     flat_old_lp: List[float] = []
+    flat_old_means: List[torch.Tensor] = []   # rollout action_mean (for per-dim old logprob)
     flat_advantages: List[float] = []
 
     for ep_idx, ep in enumerate(episodes):
         if not ep_has_signal[ep_idx]:
             continue
         adv = ep_advantages[ep_idx]
-        for t in range(ep.finish_step):
+        T = ep.finish_step
+        # Temporal (action-level) credit: with LIBERO's sparse terminal reward,
+        # the discounted return at step t is gamma^(T-1-t)·R, so credit
+        # concentrates on the actions closest to the (success/fail) terminal.
+        # We redistribute the group-relative advantage by that discount, then
+        # renormalize so the per-episode MEAN weight = 1 (pure redistribution —
+        # keeps the effective step size unchanged, only shifts WHERE credit lands).
+        if temporal_credit and T > 0:
+            w = [gamma ** (T - 1 - t) for t in range(T)]
+            wbar = sum(w) / T
+            disc = [wi / wbar for wi in w]
+        else:
+            disc = [1.0] * T
+        for t in range(T):
             sr = ep.step_records[t]
             flat_images.append(sr.images)
             flat_instrs.append(sr.instruction)
             flat_actions.append(sr.action_taken)
             flat_old_lp.append(sr.old_log_prob)
-            flat_advantages.append(adv)
+            flat_old_means.append(sr.action_mean)
+            flat_advantages.append(adv * disc[t])
 
     N = len(flat_actions)
     empty = {"loss": 0.0, "pg_loss": 0.0, "kl": 0.0, "ratio_mean": 1.0, "clip_frac": 0.0,
@@ -112,6 +130,7 @@ def vla_grpo_loss(
 
     actions_t = torch.stack(flat_actions).to(device)
     old_lp_t = torch.tensor(flat_old_lp, device=device, dtype=torch.float32)
+    old_means_t = torch.stack(flat_old_means).to(device) if token_level else None
     adv_t = torch.tensor(flat_advantages, device=device, dtype=torch.float32)
 
     n_batches_local = (N + micro_batch - 1) // micro_batch
@@ -145,28 +164,37 @@ def vla_grpo_loss(
         batch_actions = actions_t[start:end]
 
         new_mean = policy.forward_mean(batch_images, batch_instrs)
-        new_lp = policy.log_prob_of_with_mean(new_mean, batch_actions)
         with torch.no_grad():
             ref_mean = ref_policy.forward_mean(batch_images, batch_instrs)
             ref_lp = ref_policy.log_prob_of_with_mean(ref_mean, batch_actions)
+        new_lp = policy.log_prob_of_with_mean(new_mean, batch_actions)
 
-        old_lp_b = old_lp_t[start:end]
         adv_b = adv_t[start:end]
+        if token_level:
+            # Token-level (per-action-dim): ratio + clip applied per Gaussian
+            # component, advantage broadcast over dims (RLinf logprob_type=token_level).
+            new_lp_pd = policy.log_prob_per_dim_with_mean(new_mean, batch_actions)     # (b, D)
+            old_lp_pd = policy.log_prob_per_dim_with_mean(old_means_t[start:end], batch_actions)
+            ratio = torch.exp(new_lp_pd - old_lp_pd.detach())                          # (b, D)
+            adv_e = adv_b.unsqueeze(1)                                                 # (b, 1)
+        else:
+            old_lp_b = old_lp_t[start:end]
+            ratio = torch.exp(new_lp - old_lp_b)                                       # (b,)
+            adv_e = adv_b
 
-        ratio = torch.exp(new_lp - old_lp_b)
-        surr1 = ratio * adv_b
+        surr1 = ratio * adv_e
         # DAPO clip-higher: decouple lower/upper clip bounds. Upper bound
         # (1+eps_high) > lower (1-eps_low) lets low-prob good actions grow more
         # aggressively. eps_high=0 falls back to the symmetric PPO clip.
         eps_high = clip_eps_high if clip_eps_high > 0 else clip_eps
-        surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + eps_high) * adv_b
+        surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + eps_high) * adv_e
         clipped = torch.min(surr1, surr2)
         if dual_clip_c > 1.0:
             # DAPO dual-clip: for negative-advantage samples, lower-bound the
             # objective at dual_clip_c * adv so a single huge ratio can't blow
             # up the update. (For adv>=0, standard min-clip is the cap.)
-            dual = dual_clip_c * adv_b
-            obj = torch.where(adv_b < 0, torch.max(clipped, dual), clipped)
+            dual = dual_clip_c * adv_e
+            obj = torch.where(adv_e < 0, torch.max(clipped, dual), clipped)
         else:
             obj = clipped
         pg = -obj.mean()
