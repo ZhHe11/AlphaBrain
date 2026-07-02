@@ -273,7 +273,7 @@ def fig_vs_vla():
         ax.fill_between(its, [max(0.0, b - sd) for b in bs], [min(1.0, b + sd) for b in bs],
                         color="#16A89B", alpha=0.15, linewidth=0, zorder=1)
     print("  RLT_a+PPO:", " ".join(f"{i}:{best[i]:.3f}" for i in its))
-    # full-VLA baselines (start at SFT base)
+    # full-VLA small-scale baselines (start at SFT base)
     for name, col in [("VLA+PPO", "#E8A33D"), ("VLA+GRPO", "#6B7280")]:
         tag = "ppo" if name.endswith("PPO") else "grpo"
         pts = {0: BASE_VLA}
@@ -284,15 +284,39 @@ def fig_vs_vla():
                 pts[it] = sr
         xs = sorted(pts)
         ax.plot(xs, [pts[i] for i in xs], "--s", color=col, lw=1.6, markersize=5,
-                alpha=0.8, label=f"{name}  (full-VLA finetune, ours, small-scale)")
+                alpha=0.72, label=f"{name} small-scale: {pts[xs[-1]]:.3f} final")
         print(f"  {name}:", " ".join(f"{i}:{pts[i]:.3f}" for i in xs))
+    # Our trained large-scale/full-VLA checkpoints. Only draw checkpoints that
+    # have offline 50-episode evals; do not connect them back to the SFT base.
+    scaled_points = [
+        ("VLA+PPO scaled FSDP-6 (iter300): 0.922",
+         "results/eval_remaining_0612/vla_ppo_scale_iter300.json", 300, "#5B4BAA", "*", 125),
+        ("VLA+GRPO tok+temp FSDP-5 (iter150): 0.836",
+         "results/eval_remaining_0612/grpo_fsdp_toktemp_iter150/summary.json", 150, "#D55E00", "D", 70),
+        ("VLA+GRPO tok+temp 1 GPU (iter300): 0.796",
+         "results/eval_remaining_0612/grpo_toktemp_iter300/summary.json", 300, "#F28E2B", "D", 58),
+    ]
+    for label, rel, x, col, marker, size in scaled_points:
+        y = _overall(os.path.join(ROOT, rel))
+        if y is None:
+            print("  missing", label, rel)
+            continue
+        ax.scatter([x], [y], s=size, marker=marker, color=col, edgecolor="white",
+                   linewidth=0.6, zorder=5, label=label)
+        ax.annotate(f"{y:.3f}", xy=(x, y), xytext=(4, 6), textcoords="offset points",
+                    fontsize=7.0, color=col, ha="left", va="bottom")
+        print(f"  {label} {x}:{y:.3f}")
     ax.axhline(BASE_VLA, color="#9CA3AF", ls=":", lw=1.0, alpha=0.7)
-    ax.text(150, BASE_VLA - 0.05, "SFT base 0.704 (full-VLA RL head-start)",
+    ax.text(138, BASE_VLA - 0.055, "QwenOFT SFT base 0.704",
             fontsize=8, color="#6B7280", ha="center")
+    ax.annotate("our large-scale\nfull-VLA checkpoints", xy=(300, 0.922), xytext=(205, 0.985),
+                arrowprops=dict(arrowstyle="->", color="#444", lw=0.9),
+                fontsize=8.2, ha="left", va="top", color="#333")
     _axfmt(ax)
-    ax.set_title("1-GPU frozen-VLA RL vs full-VLA RL\n"
-                 "RLT learns from 0 and overtakes full fine-tuning's 0.70 head-start", fontsize=11)
-    ax.legend(loc="lower right", fontsize=9)
+    ax.set_ylim(0.0, 1.02)
+    ax.set_xlim(-5, 330)
+    ax.set_title("Frozen-VLA RLT vs our full-VLA RL: small-scale curves plus trained checkpoints", fontsize=10.5)
+    ax.legend(loc="lower right", fontsize=7.0, frameon=True)
     fig.tight_layout()
     out = os.path.join(HERE, "fig6b_rlt_vs_vla.png")
     fig.savefig(out, dpi=150); plt.close(fig); print("wrote", out)

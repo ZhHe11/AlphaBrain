@@ -123,15 +123,8 @@ The gradient step is negligible---an iteration of full-VLA PPO is dominated by C
 \begin{figure}[t]
     \centering
     \includegraphics[width=0.78\linewidth]{figures/rlt_vs_vla_curve.png}
-    \caption{\textbf{Single-GPU frozen-VLA RL vs.\ full-VLA fine-tuning (compute-matched, ours).} Offline 50-ep all-task success rate per checkpoint. RLT$_a$+PPO (teal) learns from a cold $0$ and converges above the small-scale full-VLA baselines (dashed), which begin from the measured $0.704$ SFT base. This is the efficiency/stability claim of RQ-B---\emph{not} a comparison against large-scale full-VLA RL (RLinf-VLA, $0.988$; see \cref{tab:rlt_cost}), which is not shown here.}
+    \caption{\textbf{Frozen-VLA RLT vs.\ our full-VLA RL.} Offline 50-ep all-task success rate per checkpoint. RLT$_a$+PPO (teal) learns from a cold $0$ and overtakes our small-scale full-VLA baselines (dashed), which begin from the measured $0.704$ SFT base. The same plot overlays our trained large-scale full-VLA checkpoints without drawing artificial endpoint lines: scaled FSDP-$6$ VLA$+$PPO ($0.922$ at iter-$300$), token-level+temporal-credit VLA$+$GRPO on FSDP-$5$ ($0.836$ at iter-$150$), and the matching single-GPU token-level+temporal-credit VLA$+$GRPO run ($0.796$ at iter-$300$).}
     \label{fig:rlt_vs_vla}
-\end{figure}
-
-\begin{figure}[t]
-    \centering
-    \includegraphics[width=0.82\linewidth]{figures/rlt_large_scale_comparison.png}
-    \caption{\textbf{Large-scale full-VLA reference.} RLT$+$PPO reaches $0.953$ on a single GPU while training only ${\sim}0.8$M parameters, exceeding our faithfully scaled FSDP-$6$ full-VLA PPO baseline ($0.922$) and reaching ${\sim}96\%$ of RLinf-VLA's reported $0.988$ with far fewer trainable parameters and GPUs. This is the large-scale caveat and efficiency frontier behind \cref{tab:rlt_cost}.}
-    \label{fig:rlt_large_scale}
 \end{figure}
 
 \begin{table}[t]
