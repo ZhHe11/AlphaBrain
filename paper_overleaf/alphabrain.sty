@@ -1,0 +1,160 @@
+%% ============================================================
+%%  alphabrain.sty
+%%  Tech-report style for "Alphabrain Platform" by AI2 ROBOTICS
+%%  Visual language inspired by the GR-3 Technical Report layout,
+%%  re-colored with the AI2 ROBOTICS (智平方) brand palette.
+%%  Compile with pdfLaTeX on Overleaf.
+%% ============================================================
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{alphabrain}[2026/06/08 Alphabrain tech-report style]
+
+% ---------- Page geometry (US-letter, GR-3-like margins) ----------
+\RequirePackage[letterpaper,margin=1in,headheight=14pt]{geometry}
+
+% ---------- Engine guard: this template requires XeLaTeX (or LuaLaTeX) ----------
+\RequirePackage{iftex}
+\ifXeTeX\else\ifLuaTeX\else
+  \PackageError{alphabrain}{Compile with XeLaTeX (Overleaf: Menu -> Compiler ->
+    XeLaTeX). Needed to load the real Palatino Linotype font files.}{}%
+\fi\fi
+
+% ---------- Math + AMS symbols (load before newpxmath to avoid \Bbbk clash) ----
+\RequirePackage{amsmath}
+\RequirePackage{amssymb}
+\let\Bbbk\relax                     % prevent newpxmath redefinition clash
+\RequirePackage{newpxmath}          % Palatino-compatible math
+
+% ---------- Real Palatino Linotype via fontspec (files in ./fonts) ----------
+\RequirePackage{fontspec}
+\setmainfont{Palatino Linotype}[
+  Path           = fonts/,
+  Extension      = .ttf,
+  UprightFont    = pala,
+  BoldFont       = palab,
+  ItalicFont     = palai,
+  BoldItalicFont = palabi,
+  Ligatures      = TeX ]
+\setsansfont{texgyreheros}[              % Helvetica-like sans for headings
+  Extension      = .otf,
+  UprightFont    = *-regular,
+  BoldFont       = *-bold,
+  ItalicFont     = *-italic,
+  BoldItalicFont = *-bolditalic,
+  Scale          = 0.90 ]
+\RequirePackage{microtype}
+
+% ---------- Core packages ----------
+\RequirePackage{graphicx}
+\RequirePackage{xcolor}
+\RequirePackage{colortbl}           % \rowcolor support
+\RequirePackage{booktabs}
+\RequirePackage{array}
+\RequirePackage{enumitem}
+\RequirePackage[skip=6pt,font=small,labelfont=bf,labelsep=space]{caption}
+\RequirePackage{subcaption}
+\RequirePackage[most]{tcolorbox}
+\RequirePackage{titlesec}
+\RequirePackage{fancyhdr}
+\RequirePackage{lastpage}
+\RequirePackage[numbers,sort&compress]{natbib}
+\RequirePackage{fontawesome5}       % \faGithub, \faGlobe icons
+
+% ============================================================
+%  BRAND PALETTE  (AI2 ROBOTICS / 智平方)
+% ============================================================
+\definecolor{abTeal}{HTML}{143C5C}   % primary deep navy blue (headings / links)
+\definecolor{abGreen}{HTML}{143C5C}   % alias kept for compatibility
+\definecolor{abBlue}{HTML}{143C5C}    % brand navy (links / citations)
+\definecolor{abDeep}{HTML}{0D2A40}    % deepest navy (rules / emphasis)
+\definecolor{abInk}{HTML}{1F2328}     % body text
+\definecolor{abGray}{HTML}{6B7280}    % secondary text
+\definecolor{abMist}{HTML}{E6EDF4}    % pale blue box fill
+\definecolor{abMistEdge}{HTML}{9DBAD3}% box border tint
+
+\color{abInk}
+
+% ---------- Hyperlinks & citations ----------
+\RequirePackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=abTeal,
+  citecolor=abBlue,
+  urlcolor=abBlue,
+  filecolor=abBlue,
+  breaklinks=true,
+  bookmarksnumbered=true,
+  pdfborder={0 0 0}
+}
+\RequirePackage[capitalise,noabbrev]{cleveref}
+
+% ============================================================
+%  SECTION HEADINGS  (sans-serif, brand teal, GR-3 cadence)
+% ============================================================
+% Headings in Palatino Linotype (serif main font), bold + brand color
+\titleformat{\section}
+  {\bfseries\Large\color{abTeal}}{\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\bfseries\fontsize{13}{16}\selectfont\color{abTeal}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}
+  {\bfseries\normalsize\color{abDeep}}{\thesubsubsection}{0.6em}{}
+% Vertical rhythm tiered by level: larger heads get more breathing room
+\titlespacing*{\section}{0pt}{2.2\baselineskip}{0.9\baselineskip}
+\titlespacing*{\subsection}{0pt}{1.4\baselineskip}{0.5\baselineskip}
+\titlespacing*{\subsubsection}{0pt}{0.95\baselineskip}{0.3\baselineskip}
+
+% Colored caption label ("Figure 1", "Table 1")
+\captionsetup{labelfont={bf}, textfont={normalcolor}}
+\renewcommand{\figurename}{Figure}
+\renewcommand{\tablename}{Table}
+
+% ============================================================
+%  RUNNING HEADER / FOOTER
+% ============================================================
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\fancyfoot[C]{\small\color{abGray}\thepage}
+\fancypagestyle{plain}{%
+  \fancyhf{}\fancyfoot[C]{\small\color{abGray}\thepage}%
+  \renewcommand{\headrulewidth}{0pt}}
+
+% ============================================================
+%  TITLE BLOCK MACROS
+% ============================================================
+% Brand header: logo at top-left + rule (mirrors "ByteDance | Seed")
+\newcommand{\abheader}[1]{%
+  \noindent\includegraphics[height=36pt]{#1}\par
+  \vspace{18pt}
+}
+
+% Title with rules above & below
+\newcommand{\abreporttitle}[1]{%
+  {\color{abTeal}\hrule height 1.1pt}\vspace{10pt}
+  \begin{center}\bfseries\fontsize{22}{26}\selectfont\color{abInk}#1\end{center}
+  \vspace{8pt}{\color{abTeal}\hrule height 1.1pt}\par
+  \vspace{16pt}
+}
+
+% Author / org line
+\newcommand{\aborg}[1]{\begin{center}\bfseries\large\color{abInk}#1\end{center}}
+\newcommand{\abnote}[1]{\begin{center}\small #1\end{center}\vspace{4pt}}
+
+% Abstract in a rounded brand box
+\newtcolorbox{ababstract}{
+  enhanced, breakable,
+  colback=white, colframe=abMistEdge,
+  boxrule=0.9pt, arc=7pt,
+  left=16pt, right=16pt, top=12pt, bottom=12pt,
+  before skip=6pt, after skip=14pt,
+}
+\newcommand{\abstractheading}{%
+  \begin{center}\bfseries\Large\color{abTeal}Abstract\end{center}\vspace{2pt}}
+
+% Metadata lines (Date / Correspondence / Project Page)
+\newcommand{\abmeta}[2]{\noindent{\bfseries #1}\enspace #2\par}
+
+% Lightweight key-value contributions helper
+\newcommand{\abrole}[2]{\noindent{\bfseries\color{abDeep}#1:}\enspace #2\par\vspace{2pt}}
+
+\endinput

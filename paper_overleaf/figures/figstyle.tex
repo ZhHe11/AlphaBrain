@@ -1,0 +1,63 @@
+%% ============================================================
+%%  figstyle.tex — Alphabrain brand TikZ styles for figures
+%%  Usage in main.tex preamble or inside a figure:
+%%     \usepackage{tikz}\usetikzlibrary{arrows.meta,positioning,shadows.blur}
+%%     \input{figures/figstyle.tex}
+%%  Colors mirror alphabrain.sty / STYLE_GUIDE.md
+%% ============================================================
+
+% ----- Brand palette (kept in sync with alphabrain.sty) -----
+\definecolor{abBrand}{HTML}{143C5C}   % primary navy blue
+\definecolor{abDeepC}{HTML}{0D2A40}   % deepest navy
+\definecolor{abMistC}{HTML}{E6EDF4}   % pale fill
+\definecolor{abEdgeC}{HTML}{9DBAD3}   % border tint
+\definecolor{abInkC}{HTML}{1F2328}    % text
+\definecolor{abGrayC}{HTML}{6B7280}   % secondary
+% ----- Logo accents (data categories) -----
+\definecolor{abTealA}{HTML}{16A89B}
+\definecolor{abGreenA}{HTML}{5DBB46}
+\definecolor{abLimeA}{HTML}{8BC53F}
+\definecolor{abSkyA}{HTML}{1CA0DB}
+\definecolor{abAmberA}{HTML}{E8A33D}
+
+% ----- Node styles -----
+\tikzset{
+  % rounded soft-fill panel (data blocks, module boxes)
+  abpanel/.style={
+    draw=abEdgeC, line width=0.8pt, fill=abMistC,
+    rounded corners=7pt, inner sep=8pt,
+    text=abInkC, align=center, font=\small},
+  % central model capsule with gradient
+  abpill/.style={
+    draw=none, rounded corners=14pt, inner xsep=18pt, inner ysep=9pt,
+    top color=abBrand, bottom color=abDeepC,
+    text=white, font=\bfseries\large, align=center,
+    blur shadow={shadow blur steps=6, shadow xshift=0pt, shadow yshift=-1pt}},
+  % colored block title / data-type label
+  ablabel/.style={text=abBrand, font=\bfseries\small},
+  % numbered round badge (sequence steps)
+  abbadge/.style={
+    circle, fill=abBrand, text=white, font=\bfseries\footnotesize,
+    inner sep=1.6pt, minimum size=12pt},
+  % flow arrow
+  abarrow/.style={
+    -{Stealth[round]}, draw=abBrand, line width=1.6pt, rounded corners},
+  % secondary / module sub-box (logo green tint)
+  abmodule/.style={
+    draw=abGreenA!60, line width=0.8pt, fill=abGreenA!12,
+    rounded corners=6pt, inner sep=7pt, text=abInkC, align=center, font=\small},
+  % small token cell (token-sequence strips)
+  abtoken/.style={
+    draw=abEdgeC, fill=abMistC, rounded corners=1.5pt,
+    minimum size=7pt, inner sep=0pt},
+}
+
+%% ----- Minimal usage example (uncomment inside a figure) -----
+% \begin{tikzpicture}[node distance=10mm]
+%   \node[abpanel] (vl)  {Vision--Language\\Data};
+%   \node[abpanel, right=of vl] (rt) {Robot Trajectory\\Data};
+%   \node[abpill, below=14mm of $(vl)!0.5!(rt)$] (m) {Alphabrain};
+%   \draw[abarrow] (vl) -- (m);
+%   \draw[abarrow] (rt) -- (m);
+%   \node[abbadge] at (m.north east) {1};
+% \end{tikzpicture}

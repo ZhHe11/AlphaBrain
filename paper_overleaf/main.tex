@@ -1,0 +1,172 @@
+% !TEX program = xelatex
+%% ============================================================
+%%  Alphabrain Platform — Technical Report
+%%  AI2 ROBOTICS (智平方)
+%%  Style: alphabrain.sty   |   Engine: XeLaTeX (real Palatino Linotype)
+%%  Overleaf: Menu -> Compiler -> XeLaTeX, and upload the fonts/ folder.
+%% ============================================================
+\documentclass[11pt]{article}
+\usepackage{alphabrain}
+
+% ---- Convenience macros for the model name ----
+\newcommand{\model}{\mbox{Alphabrain}}
+\newcommand{\platform}{Alphabrain Platform}
+
+\begin{document}
+
+% ===== Brand header (logo + rule) =====
+\abheader{figures/logo_aifang.png}
+
+% ===== Title =====
+\abreporttitle{Alphabrain Platform Technical Report}
+
+% ===== Organization / author line =====
+\aborg{AI\textsuperscript{2} ROBOTICS X-Lab Team}
+\abnote{%
+  \faGithub~\url{https://github.com/AlphaBrainGroup/AlphaBrain}\\[2pt]
+  \faGlobe~\url{https://www.alphabrain-platform.com/}}
+\abnote{Full Author List in \hyperref[sec:contrib]{Contributions and Acknowledgements}}
+
+% ===== Abstract box =====
+\begin{ababstract}
+\abstractheading
+We present \platform{}, a unified platform for building generalist embodied
+intelligence. \platform{} integrates large-scale vision–language pretraining,
+robot trajectory learning, and efficient downstream adaptation into a single,
+end-to-end recipe. The platform produces \model{}, a vision–language–action
+(VLA) model that follows natural-language instructions and generalizes to novel
+objects, environments, and tasks. \platform{} is designed for robustness on
+long-horizon and dexterous manipulation, and supports rapid, cost-effective
+fine-tuning from a small number of human demonstrations. Through extensive
+real-world experiments, we show that \platform{} delivers strong instruction
+following, reliable long-horizon execution, and sample-efficient adaptation. We
+hope \platform{} serves as a practical foundation for deploying generalist
+robots in everyday settings.
+
+\vspace{8pt}
+\abmeta{Date:}{June 8, 2026}
+\abmeta{Correspondence:}{\href{mailto:research@ai2robotics.com}{research@ai2robotics.com}}
+\abmeta{Project Page:}{\url{https://ai2robotics.com/alphabrain}}
+\end{ababstract}
+
+% ============================================================
+\section{Introduction}\label{sec:intro}
+% ------------------------------------------------------------
+The pursuit of generalist robots capable of assisting humans with everyday tasks
+has been a long-standing goal in robotics. A central challenge stems from the
+diversity of the real world, which demands policies that generalize across a wide
+range of objects, scenes, and instructions. Recent advances in
+Vision–Language–Action (VLA) models~\citep{example2025} have paved a promising
+path toward intelligent generalist policies.
+
+In this report, we introduce \platform{}, \ldots
+\emph{(Replace this paragraph with your contribution summary; see \cref{fig:overview}.)}
+
+\begin{figure}[t]
+  \centering
+  % \includegraphics[width=\linewidth]{figures/overview.pdf}
+  \fbox{\parbox[c][2.4in][c]{\linewidth}{\centering\color{abGray}\itshape
+    figures/overview.pdf — system overview goes here}}
+  \caption{\textbf{Overview.} \platform{} learns from vision–language data,
+    robot trajectory data, and human trajectory data, and performs dexterous,
+    long-horizon tasks with strong robustness and generalization.}
+  \label{fig:overview}
+\end{figure}
+
+We make the following contributions:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt,topsep=2pt]
+  \item A unified training recipe combining web-scale vision–language data with
+        robot and human trajectory data.
+  \item \model{}, a VLA model that strictly follows instructions and generalizes
+        to novel settings.
+  \item Extensive real-world experiments demonstrating robust long-horizon and
+        dexterous capabilities.
+\end{itemize}
+
+% ============================================================
+\section{The \texorpdfstring{\model{}}{Alphabrain} Model}\label{sec:model}
+% ------------------------------------------------------------
+\model{} is an end-to-end vision–language–action model $\pi_\theta$. It takes as
+input a language instruction $l$, multi-view observations $\mathbf{o}_t$, and the
+robot state $\mathbf{s}_t$, and predicts an action chunk
+$\mathbf{a}_t = \pi_\theta(l, \mathbf{o}_t, \mathbf{s}_t)$.
+
+\subsection{Architecture}\label{sec:arch}
+Describe the backbone, the action head, and any normalization choices here.
+
+\subsection{Action Prediction}\label{sec:action}
+We supervise action prediction with a flow-matching objective:
+\begin{equation}
+  L_{\text{action}}(\theta) =
+  \mathbb{E}_{\{\mathbf{a}_t,\mathbf{o}_t,\mathbf{s}_t,l\}\sim\mathcal{D}}
+  \Big[\,\big\lVert\, \mathbf{v}_\theta(l,\mathbf{o}_t,\mathbf{s}_t,\mathbf{a}_t^\tau)
+  - \mathbf{u}(\mathbf{a}_t^\tau\mid\mathbf{a}_t)\,\big\rVert^2 \Big],
+  \label{eq:flow}
+\end{equation}
+where $\tau\sim\mathcal{U}(0,1)$ is the flow-matching timestep.
+
+% ============================================================
+\section{Training Recipe}\label{sec:recipe}
+% ------------------------------------------------------------
+We train \model{} on a mixture of data sources, including robot trajectory data
+for imitation learning, web-scale vision–language data for co-training, and human
+trajectory data for few-shot generalization.
+
+\subsection{Imitation Learning with Robot Trajectory Data}
+We maximize the log-likelihood of the policy on expert demonstrations
+$\mathcal{D}$:
+\begin{equation}
+  \max_\theta\;
+  \mathbb{E}_{\{\mathbf{a}_t,\mathbf{o}_t,\mathbf{s}_t,l\}\sim\mathcal{D}}
+  \big[\log \pi_\theta(\mathbf{a}_t\mid\mathbf{o}_t,\mathbf{s}_t,l)\big].
+\end{equation}
+
+\subsection{Co-training with Vision–Language Data}
+Explain the co-training mixture and weighting here.
+
+% ============================================================
+\section{Experiments}\label{sec:exp}
+% ------------------------------------------------------------
+\begin{table}[t]
+  \centering
+  \caption{\textbf{Main results.} Average task progress (\%) across benchmarks.}
+  \label{tab:main}
+  \begin{tabular}{lccc}
+    \toprule
+    Method & Pick-and-Place & Table Bussing & Cloth Manip. \\
+    \midrule
+    Baseline           & 00.0 & 00.0 & 00.0 \\
+    \rowcolor{abMist}
+    \textbf{\platform{}} & \textbf{00.0} & \textbf{00.0} & \textbf{00.0} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Summarize the experimental setup, baselines, and findings here, referencing
+\cref{tab:main}.
+
+% ============================================================
+\section{Conclusion}\label{sec:conclusion}
+% ------------------------------------------------------------
+We introduced \platform{}, a unified platform for generalist embodied
+intelligence, and \model{}, the VLA model it produces. We hope it serves as a
+step toward broadly capable, reliable robots.
+
+% ============================================================
+
+\input{secs/rl_bottleneck}
+
+\input{secs/continual_learning}
+
+\section*{Contributions and Acknowledgements}\label{sec:contrib}
+% ------------------------------------------------------------
+\addcontentsline{toc}{section}{Contributions and Acknowledgements}
+
+
+% TODO: fill in contributor roles, e.g. \abrole{Project Lead}{...}
+
+% ===== References =====
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

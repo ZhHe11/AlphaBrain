@@ -18,9 +18,9 @@
 
 ## 2. 对照我们(QwenOFT,LIBERO-Goal,50-ep,reward≥0.5 判据)
 
-| | base | VLA+GRPO | VLA+PPO | 最强 RLT_a+PPO |
+| | base | VLA+GRPO | VLA+PPO | 最强 RLT+PPO |
 |:--|:--|:--|:--|:--|
-| **我们** | 0.704 | 0.756 (+5.2) | 0.718 (+1.4) | 0.936 |
+| **我们** | 0.704 | 0.756 (+5.2) | 0.718 (+1.4) | 0.953 |
 | **RLinf(Goal)** | 0.641 | **0.988 (+34.7)** | — | — |
 
 **判据对照实测(2026-06-08,success_once 重评)**:用 RLinf 的 success_once 判据重评我们的 VLA baseline → VLA+PPO 0.718→**0.74**(+0.022)、VLA+GRPO 0.756→**0.75**(−0.006)。**判据只值 ~±2pp,RLinf 的 +23pp 差距几乎全是规模/训练有效性,不是测量假象。** 这反而强化了"差距真实、RLT 卖效率"的定位。
@@ -28,7 +28,7 @@
 **关键观察**:
 1. **base 可比甚至我们更高**:我们 QwenOFT base 0.704 > RLinf OpenVLA-OFT base(Goal)0.641。**起点不是问题。**
 2. **差距 100% 在 RL 有效性**:RLinf-GRPO 增益 +34.7pp(冲到 0.988),我们 VLA+GRPO 仅 +5.2pp。
-3. **连我们最强的 RLT_a+PPO(0.936)都低于 RLinf 全量微调 GRPO(0.988)**。
+3. **我们最强的 RLT+PPO(0.953)仍低于 RLinf 全量微调 GRPO(0.988)**,但以单卡、冻结 VLA、只训小 actor/critic 达到约 96% 的绝对 SR。
 
 ## 3. 为什么差这么多(setting 差异)
 
@@ -58,18 +58,18 @@
 | 并行环境 | 4–8 | 128–256 | ~32× 少 |
 | batch | global ~40 / micro 2 | global 640 / micro 80 | ~16–40× 少 |
 | 训练后端 | 单进程多线程,**无 FSDP/Megatron** | FSDP+HF / Megatron+vLLM | — |
-| **LIBERO-Goal SR** | **0.936**(RLT_a+PPO) | **0.988**(GRPO) | — |
+| **LIBERO-Goal SR** | **0.953**(RLT+PPO; RLT_a+PPO=0.951) | **0.988**(GRPO) | — |
 
 **一句话效率论断(已用实测修正)**:
-> **RLT 在单张 80GB 卡上(占 ~55–69GB)、只训 ~0.8M 参数(<0.02%,4B VLA + encoder 全冻结、无需 FSDP),达到 0.936;RLinf 用 8+ 卡 FSDP、~640GB 总显存、全 4B 参数梯度、256 环境,达到 0.988。RLT 以 ~8× 更少 GPU、~10× 更少总显存、~5000× 更少可训参数,换到 ~95% 的性能。**
+> **RLT 在单张 80GB 卡上(占 ~55–69GB)、只训 ~0.8M 参数(<0.02%,4B VLA + encoder 全冻结、无需 FSDP),达到 0.953;RLinf 用 8+ 卡 FSDP、~640GB 总显存、全 4B 参数梯度、256 环境,达到 0.988。RLT 以 ~8× 更少 GPU、~10× 更少总显存、~5000× 更少可训参数,换到 ~96% 的性能。**
 
 **注意**:RLT 的省**不在"单卡显存小"**(冻结的 4B VLA + 大 batch rollout 仍占满大半张卡 ~60GB),而在 **(1) 单卡即可、无需 8 卡 FSDP;(2) 只训 <0.02% 的参数、不碰 4B 全参梯度与优化器态**。这才是诚实的效率卖点。
 
 ## 4. 对我们报告 RQ-B 的诚实影响(必须修正)
 
-报告原结论:**"RLT 路线(0.916/0.936)显著优于全量微调(0.718/0.756)"**。
+报告原结论:**"RLT 路线(0.953/0.951)显著优于我们的小规模全量微调(0.718/0.756)"**。
 
-**问题**:这是拿我们**强的 RLT** 对比我们**弱的、under-scaled 的 VLA baseline**——不是公平对比。RLinf 证明全量微调 GRPO 在 LIBERO-Goal 能到 **0.988**,远超我们 RLT 的 0.936。
+**问题**:这是拿我们**强的 RLT** 对比我们**弱的、under-scaled 的 VLA baseline**——不是公平对比。RLinf 证明全量微调 GRPO 在 LIBERO-Goal 能到 **0.988**,高于我们 RLT 的 0.953。
 
 **因此 RQ-B 必须改为**(三选一或组合):
 - (a)**加 caveat**:明确"全量微调 baseline 为小规模实现(few-env / 基础 GRPO),非 SOTA;大规模全量微调(如 RLinf)可达 0.98+。本文 RLT 优势仅相对此小规模 baseline,且 RLT 的价值主张应改为**计算效率/训练稳定性**而非绝对 SR 上限"。
@@ -126,3 +126,28 @@ lr=5e-5 run actively HURTS the hard task (t3 0.30→0.10) while easy tasks satur
 — the coarse episode-level credit's tug-of-war. Clips regulate step SIZE; they
 cannot fix step DIRECTION, which is set by the (coarse) advantage. Confirms the
 limiter is token-level credit (needs discrete action head), not the clip recipe.
+
+### UPDATE (2026-06-24): token-level log-prob + temporal credit is the useful piece
+
+Later runs added a QwenOFT-compatible approximation of RLinf's fine-grained credit:
+token-level action log-prob accounting plus temporal reward redistribution. Source
+eval JSONs:
+`results/eval_remaining_0612/grpo_toktemp_iter300/summary.json` and
+`results/eval_remaining_0612/grpo_fsdp_toktemp_iter150/summary.json`.
+
+| variant | GPUs / ckpt | offline 50-ep all-task SR | note |
+|---|---:|---:|---|
+| base VLA | — | 0.704 | SFT before RL |
+| vanilla VLA+GRPO | 1 | 0.740 | basic episode-level GRPO |
+| scaled vanilla VLA+GRPO | FSDP-6 | 0.744 | scale alone gives almost no gain |
+| token+temporal VLA+GRPO | 1, iter300 | 0.796 | algorithmic credit helps |
+| token+temporal VLA+GRPO | FSDP-5, iter150 | 0.836 | scale + credit stacks |
+| VLA+PPO | FSDP-6, iter300 | 0.922 | still stronger in our stack |
+| RLinf DAPO-GRPO | 8+ | 0.988 | OpenVLA-OFT + full RLinf machinery |
+
+This revises the earlier negative phrasing. DAPO clip tricks alone were not enough,
+but fine-grained credit assignment is real and measurable: GRPO moves from
+0.740--0.744 to 0.796--0.836. The remaining gap to PPO/RLinf likely reflects the
+full RLinf package (action-token parameterization, valid-action masking,
+partial-reset/dynamic filtering, much larger env count), not a simple learning-rate
+or FSDP-scale issue.

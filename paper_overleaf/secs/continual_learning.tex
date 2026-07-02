@@ -1,0 +1,167 @@
+% =============================================================================
+% AlphaBrain Technical Report — Continual Learning chapter (~2 pages).
+% De-branded benchmark of standard CL methods across AlphaBrain VLA backbones.
+% =============================================================================
+\newcommand{\neutbd}{\textcolor{black!35}{--}} % NeuroVLA cell pending training
+\newcommand{\rctbd}{\textcolor{black!35}{--}}  % RoboCasa-Lifelong cell pending (our replicas)
+\newcommand{\pitbd}{\textcolor{black!35}{--}}  % pi0.5 LIBERO CL cell pending
+
+\section{Continual Learning for Vision-Language-Action Models}
+\label{sec:cl}
+
+Vision-Language-Action (VLA) policies are increasingly deployed as long-lived agents that must acquire new manipulation skills over time without re-training from scratch or revisiting the full data of every prior task. Yet fine-tuning a VLA on a new task overwrites previously learned behaviors --- \emph{catastrophic forgetting} --- which is especially damaging for the large, expensively pretrained backbones at the core of modern VLAs. As part of the AlphaBrain framework, we provide a unified \textbf{continual-learning (CL) module} that wraps any supported VLA backbone with a common replay-and-regularization interface, so that CL strategies can be swapped and compared under identical training budgets. This chapter benchmarks the standard CL paradigms shipped with the module across structurally different action heads, establishing reference numbers and surfacing the open challenges that motivate future VLA-CL research.
+
+\subsection{Experimental Setup}
+\label{sec:cl_setup}
+
+\textbf{Benchmark.} We evaluate on the LIBERO suite~\citep{liu2023libero}, using two task streams that stress complementary failure modes. \textbf{LIBERO-Goal} contains $10$ single-stage tasks with distinct objectives in a shared workspace (skill diversity and semantic interference); \textbf{LIBERO-Long} contains $10$ compositional multi-stage tasks (structural retention under long action chains). Each suite is trained sequentially, one task at a time.
+
+\textbf{Backbones.} To test whether CL behavior is policy-architecture dependent, we span three backbones (Tab.~\ref{tab:backbones}) that share an identical Qwen2.5-VL-3B language model~\citep{community2026starvla} and differ \emph{only} in the action head: a GR00T DiT-B regression head (\textbf{QwenGR00T-3B}), a DiT-B denoising-diffusion head (\textbf{QwenOFT-3B})~\citep{chi2025diffusion}, and a Q-Former $+$ spiking-neural-network (SNN) head (\textbf{NeuroVLA-3B}). This isolates a clean axis spanning deterministic, stochastic~\citep{zhang2025flowpolicy}, and brain-inspired decoders. All backbones use rank-$32$ LoRA and a matched per-task training and replay budget.
+
+\begin{table}[t]
+    \centering
+    \caption{\small{\textbf{Cross-architecture VLA backbones in the AlphaBrain CL module.} All share a Qwen2.5-VL-3B language backbone and a matched rank-$32$ LoRA / CL budget; they differ \emph{only} in the action head, isolating the policy-architecture axis.}}
+    \label{tab:backbones}
+    \vspace{0.2em}
+    \footnotesize
+    \setlength{\tabcolsep}{6pt}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{l l l l}
+        \toprule
+        \textbf{Backbone} & \textbf{Action head} & \textbf{Decoding paradigm} & \textbf{Aux.\ vision} \\
+        \midrule
+        QwenGR00T-3B & DiT-B regression          & Deterministic continuous & ---         \\
+        QwenOFT-3B   & DiT-B denoising diffusion & Stochastic / diffusion   & DINOv2-S/14 \\
+        NeuroVLA-3B  & Q-Former $+$ SNN (LIF)    & Spiking / brain-inspired & ---         \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\textbf{Methods and metrics.} We compare four standard CL paradigms under identical replay budgets: \emph{Sequential FT} (no replay; catastrophic-forgetting lower bound), \emph{ER}~\citep{rolnick2019experience} (uniform reservoir replay), \emph{MIR}~\citep{aljundi2019online} (interference-aware replay prioritizing samples with the largest virtual-step loss increase), and \emph{iCaRL}~\citep{rebuffi2017icarl} (exemplar herding with feature-MSE distillation against the previous-task snapshot). We report \textbf{Average Success Rate} (ASR$\uparrow$, $50$ rollouts $\times 10$ tasks per cell on the final checkpoint) and \textbf{Negative Backward Transfer} (NBT$\downarrow$)~\citep{lopez2017gradient} from a $10{\times}10$ task-by-checkpoint matrix, $\mathrm{NBT}=\frac{1}{N-1}\sum_{i=1}^{N-1}(R_{i,i}-R_{N,i})$, where $R_{j,i}$ is the success rate on task $i$ after training task $j$; lower is better, $\mathrm{NBT}{=}0$ means zero forgetting.
+
+\subsection{Results and Analysis}
+\label{sec:cl_results}
+
+\begin{table}[t]
+    \centering
+    \caption{\textbf{Continual learning across three AlphaBrain VLA backbones and two LIBERO suites.} ASR$\uparrow$ ($50$ rollouts $\times 10$ tasks/cell, final checkpoint); NBT$\downarrow$ from a $10{\times}10$ task-by-checkpoint matrix. Best per (backbone, suite, metric) in \textbf{bold}; \emph{Sequential FT} (no replay) is grayed as the lower bound. All replay methods share a matched per-task buffer. \textcolor{black!45}{Gray ``--'' = NeuroVLA-3B runs in progress.}}
+    \label{tab:main_results}
+    \vspace{0.3em}
+    \footnotesize
+    \setlength{\tabcolsep}{3pt}
+    \renewcommand{\arraystretch}{1.18}%
+    \begin{tabular}{@{}l cc cc cc cc cc cc @{}}
+        \toprule
+        & \multicolumn{4}{c}{\textbf{QwenGR00T-3B}}
+        & \multicolumn{4}{c}{\textbf{QwenOFT-3B}}
+        & \multicolumn{4}{c}{\textbf{NeuroVLA-3B}} \\
+        \cmidrule(lr){2-5}\cmidrule(lr){6-9}\cmidrule(lr){10-13}
+        & \multicolumn{2}{c}{\textsc{Goal}} & \multicolumn{2}{c}{\textsc{Long}}
+        & \multicolumn{2}{c}{\textsc{Goal}} & \multicolumn{2}{c}{\textsc{Long}}
+        & \multicolumn{2}{c}{\textsc{Goal}} & \multicolumn{2}{c}{\textsc{Long}} \\
+        \cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}\cmidrule(lr){10-11}\cmidrule(lr){12-13}
+        \textbf{Method}
+            & ASR$\uparrow$ & NBT$\downarrow$ & ASR$\uparrow$ & NBT$\downarrow$
+            & ASR$\uparrow$ & NBT$\downarrow$ & ASR$\uparrow$ & NBT$\downarrow$
+            & ASR$\uparrow$ & NBT$\downarrow$ & ASR$\uparrow$ & NBT$\downarrow$ \\
+        \midrule
+        \textcolor{black!55}{Sequential FT}
+            & \textcolor{black!55}{12.6} & \textcolor{black!55}{85.1}
+            & \textcolor{black!55}{9.0}  & \textcolor{black!55}{80.2}
+            & \textcolor{black!55}{8.0}  & \textcolor{black!55}{67.2}
+            & \textcolor{black!55}{9.0}  & \textcolor{black!55}{62.9}
+            & \textcolor{black!55}{4.2} & \textcolor{black!55}{63.8} & \textcolor{black!55}{5.0} & \textcolor{black!55}{25.6} \\
+        ER
+            & 51.6 & 46.7 & 31.4 & 35.6
+            & 39.4 & 47.8 & 33.0 & 33.3
+            & 26.8 & 30.4 & 9.6 & \neutbd \\
+        MIR
+            & \textbf{76.2} & 10.4 & 29.8 & 32.2
+            & \textbf{73.6} & \textbf{9.3} & \textbf{41.0} & 19.6
+            & 60.4 & 9.8 & 14.0 & 17.8 \\
+        iCaRL
+            & 70.0 & \textbf{8.9} & \textbf{37.0} & \textbf{23.3}
+            & 65.0 & 13.0 & 33.0 & \textbf{6.0}
+            & 9.6 & 12.2 & \neutbd & \neutbd \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Table~\ref{tab:main_results} reports the main comparison; three findings stand out.
+
+\textbf{(1) Replay is necessary but uniform replay is far from sufficient.} Sequential FT collapses to $8$--$13\%$ ASR with NBT above $60$, confirming severe forgetting. Uniform ER recovers a large fraction of performance on LIBERO-Goal ($39$--$52\%$) but its NBT stays high ($35$--$48$), i.e.\ it slows forgetting without preventing it. Selecting \emph{what} to replay matters more than simply replaying.
+
+\textbf{(2) Interference-aware selection helps most where interference is highest.} On LIBERO-Goal, where tasks share a workspace and semantically interfere, MIR lifts ASR by $+20$--$34$\,pp over ER ($76.2$ vs $51.6$ on QwenGR00T; $73.6$ vs $39.4$ on QwenOFT) and slashes NBT to single digits. iCaRL's feature distillation gives the best retention on several cells (NBT $8.9$ / $6.0$). The advantage compresses on LIBERO-Long: no method exceeds $41\%$ ASR, and MIR can even fall slightly below ER (QwenGR00T-Long, $29.8$ vs $31.4$), because frame-level selection over a global buffer cannot guarantee coverage of brief sub-skills in long compositional trajectories.
+
+\textbf{(3) Method transferability holds for replay selection but breaks for distillation on the spiking head.} Swapping the deterministic regression head (QwenGR00T) for a stochastic diffusion head (QwenOFT) leaves the ordering --- MIR/iCaRL $>$ ER $\gg$ Sequential FT --- unchanged, so the CL strategy transfers across these gradient-standard action heads rather than being tuned to one policy class. The brain-inspired NeuroVLA-3B decoder qualifies this conclusion sharply. \emph{Replay}-based methods still transfer: MIR dominates (Goal ASR $60.4$, NBT $9.8$ --- on par with the Qwen heads' single-digit NBT) and uniform ER ($26.8$) clears Sequential FT ($4.2$). But \emph{iCaRL collapses} to $9.6\%$ Goal ASR --- below uniform ER and only marginally above the no-replay lower bound --- despite ranking a strong second on both Qwen heads ($70.0$ / $65.0$). It learns the most recent task (the only one near its Qwen level) yet forgets nearly all earlier ones: its feature-MSE distillation and herding, tuned to continuous feature spaces, do not preserve the spiking SNN's representations across tasks. Method choice is thus transferable for \emph{what-to-replay} selection but not for distillation-based consolidation once the action head leaves the gradient-standard regime --- a caution against assuming CL recipes port unchanged to non-standard decoders.
+
+\textbf{Effect of robot-manipulation pretraining.} The three backbones above carry only a Qwen2.5-VL \emph{vision-language} prior; their action heads are trained from scratch with no exposure to robot trajectories. To probe whether a \emph{robot-manipulation} prior changes continual-learning dynamics, we run $\pi_{0.5}$ --- a PaliGemma policy pretrained on large-scale robot data (the un-RoboCasa'd \texttt{pi05\_base} prior), fine-tuned full-parameter --- through the identical LIBERO CL protocol (Tab.~\ref{tab:pi05_libero}). Read against the from-scratch backbones of Tab.~\ref{tab:main_results}, this isolates what a manipulation prior buys for CL: a strong prior should both raise absolute success and stabilize features so that less is overwritten between tasks (lower NBT), most visibly under \emph{Sequential FT} where no replay protects earlier skills.
+
+\begin{table}[t]
+    \centering
+    \caption{\textbf{$\pi_{0.5}$ (robot-pretrained) on LIBERO continual learning.} A PaliGemma policy carrying a large-scale robot-manipulation prior (\texttt{pi05\_base}), fine-tuned \emph{full-parameter} under the same four CL methods and protocol as Tab.~\ref{tab:main_results}. The contrast with Tab.~\ref{tab:main_results}'s from-scratch backbones reflects the effect of pretraining (note: $\pi_{0.5}$ differs in both the pretrained prior \emph{and} the trainable-parameter set). \textcolor{black!45}{Gray ``--'' = runs in progress.}}
+    \label{tab:pi05_libero}
+    \vspace{0.2em}
+    \footnotesize
+    \setlength{\tabcolsep}{8pt}
+    \renewcommand{\arraystretch}{1.18}
+    \begin{tabular}{@{}l cc cc@{}}
+        \toprule
+        & \multicolumn{2}{c}{\textbf{LIBERO-Goal}} & \multicolumn{2}{c}{\textbf{LIBERO-Long}} \\
+        \cmidrule(lr){2-3}\cmidrule(lr){4-5}
+        \textbf{Method} & ASR$\uparrow$ & NBT$\downarrow$ & ASR$\uparrow$ & NBT$\downarrow$ \\
+        \midrule
+        \textcolor{black!55}{Sequential FT} & \pitbd & \pitbd & \pitbd & \pitbd \\
+        ER    & \pitbd & \pitbd & \pitbd & \pitbd \\
+        MIR   & \pitbd & \pitbd & \pitbd & \pitbd \\
+        iCaRL & \pitbd & \pitbd & \pitbd & \pitbd \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Scaling Up: RoboCasa Lifelong}
+\label{sec:cl_robocasa}
+
+To test whether the AlphaBrain CL module transfers beyond LIBERO to a foundation-scale lifelong protocol, we additionally replicate the official \textbf{GR00T-N1.5 RoboCasa Lifelong} benchmark: four sequential phases (P1\,$=$\,$65$ atomic tasks; P2--P4\,$=$\,$20$ compositional tasks each), pure sequential fine-tuning with \emph{no} replay, and \emph{cumulative} per-phase evaluation on the held-out \texttt{pretrain} split. Table~\ref{tab:robocasa_lifelong} casts three foundations into this protocol: the official NVIDIA GR00T-N1.5 (published reference numbers), and two AlphaBrain replicas. The first is a $\pi_{0.5}$ policy fine-tuned from the un-RoboCasa'd \texttt{pi05\_base} prior with the entire PaliGemma VLM frozen --- mirroring the official ``train only the action head'' recipe at the full $100$k\,/\,$60$k-step, batch-$128$ scale. The second is a from-scratch QwenGR00T trained with rank-$32$ LoRA on the VLM plus a full DiT head at a reduced $25$k\,/\,$15$k-step scale, since no RoboCasa-pretrained QwenGR00T foundation exists to freeze onto. Because the three differ in pretrained prior, trainable parameters, and step budget, the comparison targets the \emph{shape} of the forgetting curve (diagonal plasticity vs.\ off-diagonal retention) rather than absolute SR.
+
+\begin{table}[t]
+    \centering
+    \caption{\textbf{RoboCasa Lifelong: per-phase retention under sequential fine-tuning.} Following the official GR00T-N1.5 lifelong protocol (4 phases, sequential FT, no replay, cumulative evaluation on \texttt{split=pretrain}). Each cell is the average success rate (\%) on phase~$j$'s task set after training through phase~$i$ (lower-triangular: the diagonal is just-learned plasticity, below-diagonal is retention of earlier phases). \textbf{Final} $=$ mean of the last row (ASR after all four phases); \textbf{Forget} $=\frac{1}{3}\sum_{i<4}(R_{ii}-R_{4i})$ (NBT$\downarrow$, $0$ $=$ no forgetting). The two AlphaBrain replicas share the protocol but differ in foundation, trainability, and step budget (see text); \textcolor{black!45}{gray ``--'' $=$ runs in progress.}}
+    \label{tab:robocasa_lifelong}
+    \vspace{0.3em}
+    \footnotesize
+    \setlength{\tabcolsep}{5pt}
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabular}{@{}l c cccc c c@{}}
+        \toprule
+        \textbf{Foundation / Setup} & \textbf{Train}
+            & \multicolumn{4}{c}{\textbf{Eval phase} (avg-SR\,\%)}
+            & \textbf{Final} & \textbf{Forget} \\
+        \cmidrule(lr){3-6}
+            & & P1 & P2 & P3 & P4 & ASR$\uparrow$ & $\downarrow$ \\
+        \midrule
+        \multirow{4}{*}{\shortstack[l]{\textbf{GR00T-N1.5}\\[3pt]{\scriptsize\textcolor{black!55}{official $\cdot$ robot-pretrained}}\\[1pt]{\scriptsize\textcolor{black!55}{freeze head $\cdot$ 100k/60k}}}}
+            & P1 & 41.5 &      &      &     &      &      \\
+            & P2 & 13.9 & 24.5 &      &     &      &      \\
+            & P3 & 13.9 & 4.8  & 11.3 &     &      &      \\
+            & P4 & 10.6 & 1.7  & 2.7  & 4.3 & 4.8  & 20.8 \\
+        \midrule
+        \multirow{4}{*}{\shortstack[l]{\boldmath$\pi_{0.5}$\textbf{ (pi05\_base)}\\[3pt]{\scriptsize\textcolor{black!55}{AlphaBrain $\cdot$ robot-pretrained}}\\[1pt]{\scriptsize\textcolor{black!55}{freeze VLM $\cdot$ 100k/60k}}}}
+            & P1 & \rctbd &        &        &        &        &        \\
+            & P2 & \rctbd & \rctbd &        &        &        &        \\
+            & P3 & \rctbd & \rctbd & \rctbd &        &        &        \\
+            & P4 & \rctbd & \rctbd & \rctbd & \rctbd & \rctbd & \rctbd \\
+        \midrule
+        \multirow{4}{*}{\shortstack[l]{\textbf{QwenGR00T}\\[3pt]{\scriptsize\textcolor{black!55}{AlphaBrain $\cdot$ from scratch}}\\[1pt]{\scriptsize\textcolor{black!55}{LoRA\,r32$+$DiT $\cdot$ 25k/15k}}}}
+            & P1 & \rctbd &        &        &        &        &        \\
+            & P2 & \rctbd & \rctbd &        &        &        &        \\
+            & P3 & \rctbd & \rctbd & \rctbd &        &        &        \\
+            & P4 & \rctbd & \rctbd & \rctbd & \rctbd & \rctbd & \rctbd \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Discussion and Outlook}
+\label{sec:cl_outlook}
+
+These reference numbers expose a clear frontier for VLA continual learning. First, \textbf{long-horizon compositional retention is the bottleneck}: every method remains below $50\%$ ASR on LIBERO-Long, and the gains that interference-aware replay delivers on single-stage tasks largely evaporate when trajectories decompose into many short, causally critical sub-skills. This motivates replay that is \emph{structure-aware} --- allocating memory at the granularity of sub-skills rather than uniformly over frames, and routing it toward the historical behaviors most at risk from the current task. Second, the architecture-agnostic ranking suggests that a single, well-designed replay interface can serve heterogeneous VLA backbones, which is precisely the abstraction AlphaBrain's CL module is built around; the spiking NeuroVLA decoder is a first step toward stress-testing that abstraction beyond standard gradient-trained heads. We release these benchmarks, backbones, and CL implementations as an extensible foundation for the community to build and compare next-generation continual-learning methods for embodied VLA agents.
