@@ -93,7 +93,7 @@ The gradient step is negligible---an iteration of full-VLA PPO is dominated by C
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=0.92\linewidth]{figures/rlt_convergence_grid.png}
+    \includegraphics[width=\linewidth]{figures/rlt_convergence_panels.png}
     \caption{\textbf{Convergence of the six RLT routes (encoder $\times$ algorithm), single GPU, cold start.} Offline 50-ep all-task success rate vs.\ training iteration. Color $=$ algorithm (TD3 navy / PPO green / GRPO amber); linestyle $=$ encoder (solid $=$ RLT full-token, dashed $=$ RLT$_a$ action-token). All curves start at iter $0=0$: the residual actor is untrained at initialization, so RL learns from scratch on top of the frozen backbone. Both PPO routes plateau highest, GRPO lowest, TD3 in between and noisiest. Shaded bands show the multi-seed std ($n\ge2$) for the routes with seed reruns.}
     \label{fig:rlt_convergence}
 \end{figure}
