@@ -138,6 +138,13 @@ The gradient step is negligible---an iteration of full-VLA PPO is dominated by C
     \label{fig:rlt_vs_vla}
 \end{figure}
 
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.82\linewidth]{figures/rlt_large_scale_comparison.png}
+    \caption{\textbf{Large-scale full-VLA reference.} RLT$+$PPO reaches $0.953$ on a single GPU while training only ${\sim}0.8$M parameters, exceeding our faithfully scaled FSDP-$6$ full-VLA PPO baseline ($0.922$) and reaching ${\sim}96\%$ of RLinf-VLA's reported $0.988$ with far fewer trainable parameters and GPUs. This is the large-scale caveat and efficiency frontier behind \cref{tab:rlt_cost}.}
+    \label{fig:rlt_large_scale}
+\end{figure}
+
 \begin{table}[t]
     \centering
     \caption{\textbf{Resource comparison: RLT (ours) vs.\ faithfully-scaled full-VLA RL (ours) vs.\ RLinf-VLA.} RLT and our scaled-VLA numbers are measured first-party (per-PID GPU memory; trainable params from checkpoint sizes; our scaled VLA$+$PPO is FSDP-$6$, all-$10$-task, RLinf-aligned hyper-parameters, offline 50-ep); the RLinf-VLA column is its reported $8$-GPU FSDP configuration~\citep{rlinfvla2025}. \textbf{RLT$+$PPO on one GPU exceeds our $6$-GPU scaled full-VLA PPO.}}
